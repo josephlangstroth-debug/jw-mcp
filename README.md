@@ -7,6 +7,8 @@ An MCP server for working with JW.org content — Bible scripture lookup with st
 
 ## Quick Start
 
+Requires Node.js 20.18.1 or newer (Node 22 LTS recommended). On older Node the server prints the required version and exits.
+
 ### Claude Code (Recommended)
 
 ```bash
@@ -210,19 +212,38 @@ Also accepts full JW.org URLs — the video ID is extracted automatically.
 
 ---
 
+## Upgrading from 1.3
+
+- Node.js 20.18.1 or newer is required (it was 18).
+- A tool call that fails unexpectedly names the tool and ends with a `Next step:` hint (1.3.3 returned the bare JavaScript error).
+- Argument names are checked: `lang` and `language` mean `langwritten` on every tool that has it, and `link` means `url`. An argument that looks like a misspelt parameter (`langauge`, `field` for `fields`) or a language under another name (`locale`, `wtlocale`) is an error that names the parameter you probably meant. Any other unknown argument is ignored, as in 1.3.3, and the result ends with a note naming it.
+
+All tool names and earlier parameter names still work.
+
+## Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `JW_MCP_FETCH_TIMEOUT_MS` | `20000` | Time limit for each request to JW.org, including reading the response (max 600000; a larger value is capped with a warning). |
+| `MCP_TRANSPORT` | `stdio` | `http` for the Docker/remote mode described above. |
+
 ## Troubleshooting
 
-1. **"Could not read package.json"** — Use absolute path in Claude Desktop config
-2. **Server disconnects** — Ensure Node.js is installed (`npm install`)
-3. **Permission denied** — `chmod +x start-server.sh`
+1. **"jw-mcp requires Node >=20.18.1"**: install Node 22 LTS (or 20.18.1+) and restart the client.
+2. **"Could not read package.json"**: use an absolute path in the Claude Desktop config.
+3. **Server disconnects**: make sure Node.js is installed and run `npm install`.
+4. **Permission denied**: `chmod +x start-server.sh`.
 
 ## Development
 
 ```bash
-npm start          # stdio mode (local)
-npm run start:http # HTTP mode (testing)
-npm test           # OAuth + HTTP connector tests
+npm start              # stdio mode (local)
+npm run start:http     # HTTP mode (testing)
+npm test               # offline tests: OAuth, HTTP connector, tools, the assembled server
+npm run test:live      # live tests against JW.org (sets JW_MCP_LIVE=1)
 ```
+
+The offline tests never touch the network: they stub `fetch` and use small synthetic fixtures. The live tests under `tests/live/` skip unless `JW_MCP_LIVE=1`.
 
 Built with Node.js, MCP SDK, node-fetch, and cheerio.
 
