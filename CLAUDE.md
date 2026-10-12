@@ -27,6 +27,7 @@ src/
     ├── args.js               # Argument helpers (toInt, toStr, toEnum, toIsoDate, ...) that throw ArgError
     ├── results.js            # textResult/jsonResult/errorResult, ToolError, wrapTool(), token estimate and pageText
     ├── text.js               # cleanText, joinText (CJK-aware), asciiDigits, absoluteUrl: shared, no imports
+    ├── songbook.js           # "Sing Out Joyfully": song video keys (pub-sjjm_<n>_VIDEO) -> WOL lyrics docid
     ├── languages.js          # resolveLanguage(): JW code / ISO tag / name -> code, jw.org path, WOL r/lp
     ├── scripture-tools.js    # search_bible_books, get_bible_verse, get_verse_with_study, get_bible_verse_url
     ├── bible-books.js        # Bible book utilities & data
@@ -109,7 +110,7 @@ Rules:
 1. Add the definition, implementation and handler case in a file under `src/tools/`.
 2. Register in `src/mcp-server.js`: add the definition to `allTools`, the handler to `toolHandlers`, and a `TOOL_META` entry with a human `title`. Startup fails if a tool has no `TOOL_META` entry. Both stdio and http modes share this file.
 3. Add the tool to `manifest.json` `tools` and to README.md.
-4. Add offline tests in `tests/tools/<area>.test.js` and a live test in `tests/live/<area>.live.test.js`. `tests/tools/integration.test.js` checks titles, annotations and that the manifest matches.
+4. Add offline tests in `tests/tools/<area>.test.js` and a live test in `tests/live/<area>.live.test.js`. Add the tool's bad-input and realistic cases to `tests/tools/integration.test.js`. The integration test checks titles, annotations, schemas, the `tools/list` size budget (14,500 characters) and that the manifest matches.
 
 ## Running the Server
 
@@ -141,7 +142,7 @@ npm run test:coverage  # auth and HTTP tests with c8 thresholds
 
 - Offline tests must not touch the network. Replace `globalThis.fetch` in `beforeEach` with a guard that throws, and stub it per test (see `tests/tools/foundation.test.js`).
 - Use small synthetic fixtures that mimic JW.org markup, JSON or RTF structure. Do not commit copies of JW.org articles, RTF files, Bible chapter pages or caption files; one sentence is the most to embed.
-- Live tests skip unless `JW_MCP_LIVE=1`. Be polite to JW.org: run a single live file while iterating (`JW_MCP_LIVE=1 node --test tests/live/foundation.live.test.js`).
+- Live tests skip unless `JW_MCP_LIVE=1`. Be polite to JW.org: run a single live file while iterating (`JW_MCP_LIVE=1 node --test tests/live/periodicals.live.test.js`).
 
 ## Key Technical Details
 
@@ -152,7 +153,7 @@ npm run test:coverage  # auth and HTTP tests with c8 thresholds
 ### MCP Server (`src/mcp-server.js`)
 
 - `allTools` adds a `title` and `annotations` (`readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true`) to every tool definition.
-- `callTool()` handles every `tools/call`: it checks `arguments ?? {}` against the tool's schema (`normalizeArgs`): `lang`/`language` become `langwritten` on tools that have it, `TOOL_ALIASES` maps per-tool names (`link` -> `url`, captions' `url`/`lank` -> `video_id`), `HIDDEN_PARAMS` lists accepted keys left out of the schema, a key within edit distance 1 (names of 4 characters or fewer) or 2 of a parameter, or a lang/locale-like key on a tool with `langwritten`, is an `isError` result naming the likely parameter, and any other key is dropped and listed in a trailing "Ignored argument ..." text block (1.3.3 ignored them; `content[0]` stays the tool's JSON). Then it passes the arguments to the handlers, turns a thrown error into an `isError` result (`errorToResult`) and answers an unknown tool name with an `isError` result listing the real tools. It never throws to the SDK.
+- `callTool()` handles every `tools/call`: it checks `arguments ?? {}` against the tool's schema (`normalizeArgs`): `lang`/`language` become `langwritten` on tools that have it, `TOOL_ALIASES` maps per-tool names (`link` -> `url`, captions' `url`/`lank` -> `video_id`), `HIDDEN_PARAMS` lists accepted keys left out of the schema (1.3.3's `pub`, `max_chars`), a key within edit distance 1 (names of 4 characters or fewer) or 2 of a parameter, or a lang/locale-like key on a tool with `langwritten`, is an `isError` result naming the likely parameter, and any other key is dropped and listed in a trailing "Ignored argument ..." text block (1.3.3 ignored them; `content[0]` stays the tool's JSON). Then it passes the arguments to the handlers, turns a thrown error into an `isError` result (`errorToResult`) and answers an unknown tool name with an `isError` result listing the real tools. It never throws to the SDK.
 
 ### OAuth Authentication (`src/auth.js`)
 
@@ -182,15 +183,18 @@ When `MCP_AUTH` is not `false` and `MCP_AUTH_SECRET` is set:
 - Book numbers: 1-39 (Old Testament), 40-66 (New Testament)
 - Bible verse URLs use jw.org/finder format with zero-padded encoding (e.g., book 19, chapter 83, verse 18 → `19083018`)
 
-### Date Handling
-- The default issue is the one that holds the current meeting week. A week (Monday to Sunday) belongs to the month of its Monday.
-- **Workbook**: bimonthly since 2021, odd months only, so the issue is the Monday's month rounded down to an odd month (`20261100` covers November–December 2026; Dec 28–Jan 3 is in the November issue). An even-month `issue` is read as the odd-month issue that covers it (`workbookIssue`).
-- **Watchtower**: issue M holds the study weeks whose Monday falls in month M+2 (the August 2026 issue covers October 5 to November 1, 2026)
-  - Watchtower studies are published 2 months ahead of their study period
-  - Year boundaries are handled (the week of Monday Dec 28, 2026 → October 2026 issue)
+### Meeting Workbook and Watchtower (`rtf-utils.js`)
+- A week (Monday to Sunday) belongs to the month of its Monday.
+- **Workbook** (`mwb`): bimonthly since 2021, so the issue is that month rounded down to an odd month (`20261100` = November–December 2026).
+- **Watchtower** (`w`): issue M holds the study weeks whose Monday falls in month M+2 (the August 2026 issue covers October 5 to November 1, 2026). Before 2016 the study edition was dated the 15th: issue codes are `YYYYMM15` (`issueCode(year, month, pub)`).
+- The tools take `date` (YYYY-MM-DD) and default to the server's local date. In Docker (UTC) the descriptions tell the AI to pass the user's local date. `date` with `week` must agree.
+- A call makes one pub-media listing request plus one file download; listings and parsed files are cached for an hour. One budget covers the call: `max(50 s, 2 x JW_MCP_FETCH_TIMEOUT_MS)`. A song video link in `links` is followed by its lyrics page (`finder?docid=`, `songbook.js`). Languages without RTF (e.g. Japanese) fall back to TXT. Sign-language editions have only video (`MP4`, `3GP`; one file per resolution, so weeks are numbered per distinct start date).
+- A week the issue skips (Memorial week in the workbook) is an error that names the undated item filed between the weeks around it (`gapEntry`: the Memorial Bible Reading Schedule) and its `url`. A `url` read looks up the issue's listing (the same cached request) for `pubName`, `language` and `link`.
+- pub-media takes the JW code itself, so when the mediator language list is down a code-like `langwritten` is used as given (`periodicalLanguage`, iso `und`; month names then come from the listing's locale).
+- Content results page `parsedText` with `pageByTokens` (`offset`/`next_offset` appear only when a file needs more than one page); a listing returns at most 200 entries.
 
 ### RTF Parsing
-Tools that fetch RTF files (Workbook, Watchtower) use `rtf-parser.js` to convert RTF markup to plain text, one line per paragraph, achieving ~70% token reduction. The cleanup only normalizes whitespace: the text is the publication's own, in any language. Do not post-process it with heuristics (they used to insert "Your answer" lines, split references and rename songs).
+`rtf-parser.js` keeps the published text verbatim: one line per paragraph, a blank line before headings, `\line` as a space, bullets as `•`, table cells joined with ` | `. Its output matches LibreOffice's text export word for word. Parsed text is about 22-27% of the RTF size. Do not post-process it with heuristics. `parseRTFDocument()` also returns the title, headings and links.
 
 ## MCP Response Format
 
@@ -221,7 +225,7 @@ Docker image published to `ghcr.io/advenimus/jw-mcp` on each release. Environmen
 | `MCP_TRUST_PROXY` | No | unset | Set `true` only when exactly one proxy (Caddy, nginx, Cloudflare Tunnel) sets or appends the client IP in `X-Forwarded-For`. Trusts one hop. |
 | `AUTH_STORE_PATH` | No | `/data/auth.json` in Docker | File store for clients and tokens |
 | `CLOUDFLARE_TUNNEL_TOKEN` | No | — | Token for the optional `cloudflared` compose service (`--profile tunnel`) |
-| `JW_MCP_FETCH_TIMEOUT_MS` | No | `20000` | Time limit per JW.org request, including reading the body (max 600000) |
+| `JW_MCP_FETCH_TIMEOUT_MS` | No | `20000` | Time limit per JW.org request, including reading the body (max 600000); a workbook or Watchtower call's budget is twice this, at least 50 s |
 
 ## Language Support
 

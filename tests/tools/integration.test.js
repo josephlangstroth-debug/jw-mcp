@@ -1,6 +1,7 @@
 // Offline tests for the assembled server: tools/list as a client sees it, and
-// tools/call through callTool. globalThis.fetch is replaced in every test, so
-// nothing here can reach JW.org.
+// every tool's failure path through tools/call. globalThis.fetch is replaced
+// in every test, so nothing here can reach JW.org. The per-tool checks cover
+// the tools already on the shared helpers (those in REALISTIC).
 
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,11 +10,48 @@ import { readFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
-import { allTools, callTool, createMcpServer } from '../../src/mcp-server.js';
+import { allTools as everyTool, callTool, createMcpServer } from '../../src/mcp-server.js';
 import { ArgError } from '../../src/tools/args.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
 const manifest = JSON.parse(readFileSync(new URL('../../manifest.json', import.meta.url), 'utf8'));
+
+// Tools that answer English calls from local data; all others fetch from JW.org.
+const LOCAL_TOOLS = new Set(['search_bible_books', 'get_bible_verse_url']);
+// Keeps tools/list small enough to send with every conversation (~3.5K tokens).
+const MAX_TOOLS_LIST_CHARS = 14500;
+
+const REALISTIC = {
+  getWorkbookLinks: {},
+  getWorkbookContent: {},
+  getWatchtowerLinks: {},
+  getWatchtowerContent: {}
+};
+
+// Bad input for each tool, and a pattern the error must contain.
+const GARBAGE = {
+  getWorkbookLinks: [
+    [{ date: '2026-13-45' }, /"date"/],
+    [{ fileformat: 'DOCX' }, /"fileformat"/],
+    [{ issue: 'abc' }, /odd months/]
+  ],
+  getWorkbookContent: [
+    [{ week: 0 }, /"week"/],
+    [{ url: 'http://127.0.0.1/x.rtf' }, /"url"/],
+    [{ url: 'https://example.com/a.rtf' }, /"url"/]
+  ],
+  getWatchtowerLinks: [
+    [{ issue: '1999' }, /"issue"/],
+    [{ date: 'yesterday' }, /"date"/]
+  ],
+  getWatchtowerContent: [
+    [{ week: 'two' }, /"week"/],
+    [{ url: 'file:///etc/passwd' }, /"url"/]
+  ]
+};
+
+// Tools with per-tool checks below.
+const allTools = everyTool.filter((t) => t.name in REALISTIC);
 
 const realFetch = globalThis.fetch;
 const realConsoleError = console.error;
@@ -23,6 +61,13 @@ function blockNetwork() {
   globalThis.fetch = async (url) => {
     fetched.push(String(url));
     throw new Error(`offline test tried to fetch ${url}`);
+  };
+}
+
+function useFetch(handler) {
+  globalThis.fetch = async (url, init) => {
+    fetched.push(String(url));
+    return handler(String(url), init);
   };
 }
 
@@ -63,33 +108,197 @@ describe('server metadata', () => {
 });
 
 describe('tools/list', () => {
+  let listed;
   let tools;
   before(async () => {
-    ({ tools } = await client.listTools());
+    ({ tools: listed } = await client.listTools());
+    tools = listed.filter((t) => t.name in REALISTIC);
   });
 
   it('lists the same tools as manifest.json, each once', () => {
-    const names = tools.map((t) => t.name);
+    const names = listed.map((t) => t.name);
     assert.equal(new Set(names).size, names.length);
     assert.deepEqual([...names].sort(), manifest.tools.map((t) => t.name).sort());
   });
 
   it('gives every tool a title, a description and read-only annotations', () => {
-    for (const tool of tools) {
+    for (const tool of listed) {
       assert.equal(typeof tool.title, 'string', tool.name);
       assert.ok(tool.title.length >= 5 && tool.title.length <= 40, `${tool.name} title`);
       assert.ok(tool.description.length >= 80 && tool.description.length <= 600, `${tool.name} description length`);
-      assert.deepEqual(tool.annotations, { readOnlyHint: true, idempotentHint: true, openWorldHint: true }, tool.name);
+      assert.deepEqual(tool.annotations, {
+        readOnlyHint: true,
+        idempotentHint: true,
+        // The local tools fetch a language's book names when langwritten is set.
+        openWorldHint: true
+      }, tool.name);
+    }
+  });
+
+  it('has valid input schemas: typed, described properties; integers with bounds', () => {
+    const TYPES = new Set(['string', 'integer', 'boolean', 'array', 'object']);
+    const KEYS = new Set(['type', 'description', 'enum', 'minimum', 'maximum', 'items', 'default']);
+    const check = (schema, where) => {
+      assert.ok(TYPES.has(schema.type), `${where}: type ${schema.type}`);
+      for (const key of Object.keys(schema)) assert.ok(KEYS.has(key), `${where}: unexpected key ${key}`);
+      if (schema.type === 'integer') {
+        assert.equal(typeof schema.minimum, 'number', `${where}: integer needs a minimum`);
+        if (schema.maximum !== undefined) assert.ok(schema.maximum >= schema.minimum, where);
+      }
+      if (schema.enum) {
+        assert.ok(schema.enum.length > 0 && schema.enum.every((v) => typeof v === 'string'), `${where}: enum`);
+        assert.equal(new Set(schema.enum).size, schema.enum.length, `${where}: duplicate enum values`);
+      }
+      if (schema.type === 'array') check(schema.items, `${where}[]`);
+    };
+    for (const tool of tools) {
+      const { type, properties, required = [] } = tool.inputSchema;
+      assert.equal(type, 'object', tool.name);
+      assert.ok(Object.keys(properties).length > 0, tool.name);
+      for (const name of required) assert.ok(properties[name], `${tool.name}: required "${name}" is a property`);
+      for (const [name, schema] of Object.entries(properties)) {
+        assert.ok(schema.description?.trim(), `${tool.name}.${name} has a description`);
+        check(schema, `${tool.name}.${name}`);
+      }
+    }
+  });
+
+  it('uses the same parameter shapes across tools', () => {
+    for (const tool of tools) {
+      const { properties } = tool.inputSchema;
+      if (tool.name !== 'search_bible_books') {
+        assert.equal(properties.langwritten?.type, 'string', `${tool.name} takes langwritten`);
+        assert.match(properties.langwritten.description, /Default/, `${tool.name} langwritten default`);
+      }
+      if (properties.date) assert.match(properties.date.description, /YYYY-MM-DD/, `${tool.name}.date`);
+      if (properties.reference) {
+        assert.deepEqual(properties.book, { type: 'integer', minimum: 1, maximum: 66, description: properties.book.description });
+        assert.equal(properties.chapter.type, 'integer');
+        assert.equal(properties.verse.type, 'string', `${tool.name}.verse is a string in every verse tool`);
+      }
+      for (const name of ['offset', 'max_chars', 'limit', 'page', 'week']) {
+        if (properties[name]) assert.equal(properties[name].type, 'integer', `${tool.name}.${name}`);
+      }
+    }
+  });
+
+  it('cross-references the follow-up tools in the descriptions', () => {
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+    assert.match(byName.getWorkbookLinks, /getWorkbookContent/);
+    assert.match(byName.getWorkbookContent, /getWorkbookLinks/);
+    assert.match(byName.getWatchtowerLinks, /getWatchtowerContent/);
+    assert.match(byName.getWatchtowerContent, /getWatchtowerLinks/);
+  });
+
+  it(`stays under ${MAX_TOOLS_LIST_CHARS} characters`, () => {
+    const size = JSON.stringify({ tools: listed }).length;
+    assert.ok(size <= MAX_TOOLS_LIST_CHARS, `tools/list is ${size} characters`);
+  });
+
+  it('accepts the realistic example input of every tool', () => {
+    for (const tool of tools) {
+      const example = REALISTIC[tool.name];
+      assert.ok(example, `${tool.name} has an example`);
+      for (const name of tool.inputSchema.required ?? []) assert.ok(name in example, `${tool.name} example has ${name}`);
+      for (const [name, value] of Object.entries(example)) {
+        const schema = tool.inputSchema.properties[name];
+        assert.ok(schema, `${tool.name} has a "${name}" property`);
+        assert.equal(Array.isArray(value) ? 'array' : typeof value, schema.type === 'integer' ? 'number' : schema.type, `${tool.name}.${name}`);
+      }
     }
   });
 });
 
-describe('tools/call', () => {
+describe('tools/call failures are isError results', () => {
+  for (const [name, cases] of Object.entries(GARBAGE)) {
+    it(`${name}: bad arguments fail without touching the network`, async () => {
+      for (const [args, pattern] of cases) {
+        const result = await client.callTool({ name, arguments: args });
+        assert.equal(result.isError, true, `${name} ${JSON.stringify(args)}`);
+        assert.match(text(result), pattern, `${name} ${JSON.stringify(args)}`);
+        assert.doesNotMatch(text(result), /TypeError|undefined|failed unexpectedly/, `${name} ${JSON.stringify(args)}`);
+      }
+      assert.deepEqual(fetched, [], `${name} fetched`);
+    });
+  }
+
+  it('tools with required parameters reject a call without arguments', async () => {
+    for (const tool of allTools) {
+      const needsInput = (tool.inputSchema.required ?? []).length > 0 || 'reference' in tool.inputSchema.properties || tool.name === 'read_wol_document';
+      if (!needsInput) continue;
+      const result = await client.callTool({ name: tool.name });
+      assert.equal(result.isError, true, tool.name);
+      assert.match(text(result), /Missing/, tool.name);
+    }
+    assert.deepEqual(fetched, []);
+  });
+
+  it('every network tool reports a JW.org 404 as an error with a next step', async () => {
+    useFetch(() => new Response('<html>not here</html>', { status: 404, statusText: 'Not Found', headers: { 'content-type': 'text/html' } }));
+    for (const tool of allTools) {
+      const result = await client.callTool({ name: tool.name, arguments: REALISTIC[tool.name] });
+      if (LOCAL_TOOLS.has(tool.name)) {
+        assert.equal(result.isError, undefined, tool.name);
+        continue;
+      }
+      assert.equal(result.isError, true, tool.name);
+      assert.match(text(result), /\nNext step: /, tool.name);
+    }
+    assert.ok(fetched.length >= allTools.length - LOCAL_TOOLS.size);
+  });
+
+  it('every network tool reports an unreachable JW.org as an error', async () => {
+    useFetch(() => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('getaddrinfo ENOTFOUND'), { code: 'ENOTFOUND' }) });
+    });
+    for (const tool of allTools.filter((t) => !LOCAL_TOOLS.has(t.name))) {
+      const result = await client.callTool({ name: tool.name, arguments: REALISTIC[tool.name] });
+      assert.equal(result.isError, true, tool.name);
+      assert.match(text(result), /Could not reach .*ENOTFOUND/, tool.name);
+    }
+  });
+
+  it('answers arguments nested too deeply for JSON with an ordinary argument error', async () => {
+    const deep = JSON.parse('['.repeat(20000) + ']'.repeat(20000));
+    for (const tool of allTools) {
+      for (const name of Object.keys(tool.inputSchema.properties)) {
+        // A deep value is rejected, or ignored where another argument wins (verse next to reference).
+        const result = await callTool({ params: { name: tool.name, arguments: { ...REALISTIC[tool.name], [name]: deep } } });
+        assert.doesNotMatch(text(result), /unexpectedly|Maximum call stack/, `${tool.name}.${name}`);
+        const alone = await callTool({ params: { name: tool.name, arguments: { [name]: deep } } });
+        assert.equal(alone.isError, true, `${tool.name}.${name} alone`);
+        assert.doesNotMatch(text(alone), /unexpectedly|Maximum call stack/, `${tool.name}.${name} alone`);
+      }
+    }
+  });
+
   it('an unknown tool is an isError result naming the real tools', async () => {
     const result = await client.callTool({ name: 'get_bible_verses', arguments: {} });
     assert.equal(result.isError, true);
     assert.match(text(result), /Unknown tool "get_bible_verses"/);
     assert.match(text(result), /get_bible_verse,/);
+  });
+});
+
+describe('content tools', () => {
+  it('getWorkbookContent returns the links in the RTF next to parsedText', async () => {
+    const rtf =
+      '{\\rtf1\\ansi {\\info{\\title Sample week}}\\pard Sample week heading\\par\\pard ' +
+      '{\\field{\\*\\fldinst HYPERLINK "https://www.jw.org/finder?wtlocale=E&lank=pub-sjjm_1_VIDEO"}{\\fldrslt Song 1}}' +
+      ' and opening comments (1 min.)\\par}';
+    useFetch(() => new Response(rtf, { status: 200, headers: { 'content-type': 'application/rtf' } }));
+    const result = await client.callTool({
+      name: 'getWorkbookContent',
+      arguments: { url: 'https://cfp2.jw-cdn.org/a/abc123/1/o/mwb_E_202609_04.rtf' }
+    });
+    assert.equal(result.isError, undefined, text(result));
+    const json = JSON.parse(text(result));
+    assert.deepEqual(json.links, [
+      { text: 'Song 1', url: 'https://www.jw.org/finder?wtlocale=E&lank=pub-sjjm_1_VIDEO' },
+      { text: 'Song 1 lyrics', url: 'https://www.jw.org/finder?wtlocale=E&docid=1102016801' }
+    ]);
+    assert.equal(json.parsedText, 'Sample week heading\nSong 1 and opening comments (1 min.)');
+    assert.equal(json.issue, '20260900');
   });
 });
 
@@ -142,10 +351,11 @@ describe('argument names', () => {
   };
 
   it('maps lang and language to langwritten on every tool that has it', async () => {
-    const { seen, handlers } = spy();
-    await callTool({ params: { name: 'getWorkbookLinks', arguments: { lang: 'S' } } }, { handlers });
-    await callTool({ params: { name: 'getWatchtowerLinks', arguments: { language: 'S', issue: '20260800' } } }, { handlers });
-    assert.deepEqual(seen, [{ langwritten: 'S' }, { langwritten: 'S', issue: '20260800' }]);
+    await run('getWatchtowerContent', { language: 'Spanish' });
+    assert.ok(fetched.some((u) => u.includes('GETPUBMEDIALINKS') && u.includes('langwritten=S')), fetched.join('\n'));
+    fetched = [];
+    await run('getWorkbookLinks', { lang: 'S' });
+    assert.ok(fetched.some((u) => u.includes('GETPUBMEDIALINKS') && u.includes('langwritten=S')), fetched.join('\n'));
   });
 
   it('maps link to url and the captions aliases to video_id', async () => {
@@ -181,9 +391,17 @@ describe('argument names', () => {
     const passed = seen.pop();
     assert.deepEqual(Object.keys(passed), []);
     assert.equal(Object.getPrototypeOf(passed), Object.prototype);
-    assert.match(links.content.at(-1).text, /^Ignored arguments "__proto__", "constructor", "toString", "translation": getWorkbookLinks takes pub, langwritten, issue, fileformat\.$/);
+    assert.match(links.content.at(-1).text, /^Ignored arguments "__proto__", "constructor", "toString", "translation": getWorkbookLinks takes langwritten, date, issue, fileformat\.$/);
     const many = await callTool({ params: { name: 'getWorkbookLinks', arguments: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`junk${i}`, i])) } }, { handlers });
     assert.match(many.content.at(-1).text, /"junk9" and 20 more: getWorkbookLinks takes/);
+  });
+
+  it('still accepts the hidden parameters', async () => {
+    const links = await run('getWorkbookLinks', { pub: 'mwb' });
+    assert.doesNotMatch(text(links), /Unknown argument/);
+    assert.ok(fetched.length > 0);
+    const content = await run('getWatchtowerContent', { max_chars: 2000 });
+    assert.doesNotMatch(text(content), /Unknown argument/);
   });
 
   it('refuses two names for one parameter that disagree', async () => {

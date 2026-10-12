@@ -984,6 +984,16 @@ describe('JW_MCP_FETCH_TIMEOUT_MS', () => {
     }
   });
 
+  it('raises the periodical tools\' call budget with the setting (twice it, at least 50 s)', () => {
+    const tools = new URL('../../src/tools/workbook-tools.js', import.meta.url).href;
+    // The longest timer the first request sets is its budget: min(timeout, call deadline).
+    const script = `const delays = []; const st = globalThis.setTimeout; globalThis.setTimeout = (fn, ms, ...a) => { delays.push(ms); return st(fn, ms, ...a); };
+      globalThis.fetch = async () => new Response('nope', { status: 404 });
+      const m = await import(${JSON.stringify(tools)}); await m.getWorkbookLinksImplementation({ date: '2026-10-12' }); console.log(Math.max(...delays));`;
+    const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], { env: { ...process.env, JW_MCP_FETCH_TIMEOUT_MS: '120000' }, encoding: 'utf8' });
+    assert.equal(r.stdout.trim(), '120000', r.stderr);
+  });
+
   it('treats a timeoutMs beyond setTimeout\'s range as a long wait, not 1 ms', async () => {
     useFetch(() => new Promise((resolve) => setTimeout(() => resolve(text('ok')), 50)));
     assert.equal(await fetchText(WOL, { timeoutMs: 3e9 }), 'ok');
