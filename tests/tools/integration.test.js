@@ -22,6 +22,10 @@ const LOCAL_TOOLS = new Set(['search_bible_books', 'get_bible_verse_url']);
 const MAX_TOOLS_LIST_CHARS = 14500;
 
 const REALISTIC = {
+  search_bible_books: { query: 'john' },
+  get_bible_verse: { reference: 'John 3:16' },
+  get_verse_with_study: { reference: 'Matt. 24:14', fields: ['verses', 'study_notes', 'study_articles'] },
+  get_bible_verse_url: { reference: 'Ps. 83:18' },
   getWorkbookLinks: {},
   getWorkbookContent: {},
   getWatchtowerLinks: {},
@@ -30,6 +34,25 @@ const REALISTIC = {
 
 // Bad input for each tool, and a pattern the error must contain.
 const GARBAGE = {
+  search_bible_books: [
+    [{ query: '' }, /"query"/],
+    [{ query: 'john', limit: 'many' }, /"limit"/],
+    [{ query: 'zzzz' }, /No Bible book matches/]
+  ],
+  get_bible_verse: [
+    [{ book: 99, chapter: 1 }, /"book"/],
+    [{ reference: 'John 99:1' }, /21 chapters/],
+    [{ reference: 'John 3:16', langwritten: 42 }, /"langwritten"/]
+  ],
+  get_verse_with_study: [
+    [{ reference: 'John 3:16', fields: ['bogus'] }, /"fields"/],
+    [{ reference: 'John 3:16', limit: 'many' }, /"limit"/],
+    [{ reference: 'John 3:16', fetch: 'maybe' }, /"fetch"/]
+  ],
+  get_bible_verse_url: [
+    [{ book: 1, chapter: 51 }, /50 chapters/],
+    [{ reference: 'Hezekiah 1:1' }, /Unknown Bible book/]
+  ],
   getWorkbookLinks: [
     [{ date: '2026-13-45' }, /"date"/],
     [{ fileformat: 'DOCX' }, /"fileformat"/],
@@ -184,6 +207,8 @@ describe('tools/list', () => {
 
   it('cross-references the follow-up tools in the descriptions', () => {
     const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
+    assert.match(byName.get_bible_verse, /get_verse_with_study/);
+    assert.match(byName.get_bible_verse, /get_bible_verse_url/);
     assert.match(byName.getWorkbookLinks, /getWorkbookContent/);
     assert.match(byName.getWorkbookContent, /getWorkbookLinks/);
     assert.match(byName.getWatchtowerLinks, /getWatchtowerContent/);
@@ -270,6 +295,8 @@ describe('tools/call failures are isError results', () => {
         assert.doesNotMatch(text(alone), /unexpectedly|Maximum call stack/, `${tool.name}.${name} alone`);
       }
     }
+    const reference = await callTool({ params: { name: 'get_bible_verse', arguments: { reference: deep } } });
+    assert.match(text(reference), /^Invalid "reference"[^]*got array \(too deeply nested to show\)/);
   });
 
   it('an unknown tool is an isError result naming the real tools', async () => {
@@ -367,16 +394,17 @@ describe('argument names', () => {
   });
 
   it('refuses a probable misspelling or a language under another name, before fetching', async () => {
-    const study = await run('get_verse_with_study', { book: 43, chapter: 17, verse: '3', field: 'cross_references' });
+    const study = await run('get_verse_with_study', { reference: 'John 17:3', field: 'cross_references' });
     assert.equal(study.isError, true);
-    assert.match(text(study), /Unknown argument "field" for get_verse_with_study; did you mean "fields"\?\nNext step: Its parameters are: book, chapter, verse/);
-    for (const [key, meant] of [['langauge', 'langwritten'], ['wtlocale', 'langwritten'], ['locale', 'langwritten'], ['isue', 'issue']]) {
-      const result = await run('getWorkbookLinks', { [key]: 'S' });
+    assert.match(text(study), /Unknown argument "field" for get_verse_with_study; did you mean "fields"\?\nNext step: Its parameters are: reference, book/);
+    for (const [key, meant] of [['referense', 'reference'], ['langauge', 'langwritten'], ['wtlocale', 'langwritten'], ['locale', 'langwritten']]) {
+      const result = await run('get_bible_verse', { reference: 'John 3:16', [key]: 'S' });
       assert.equal(result.isError, true, key);
       assert.match(text(result), new RegExp(`Unknown argument "${key}".*did you mean "${meant}"`), key);
     }
     assert.match(text(await run('get_jw_captions', { videoId: 'pub-jwb-142_1_VIDEO' })), /did you mean "video_id"/);
-    assert.deepEqual(fetched, []);
+    assert.equal((await run('search_bible_books', { query: 'John', language: 'S', limit: 1 })).isError, undefined);
+    assert.deepEqual(fetched.filter((u) => !u.startsWith('https://www.jw.org/')), []);
   });
 
   it('drops any other unknown argument with a note, as 1.3.3 ignored it', async () => {
@@ -385,7 +413,7 @@ describe('argument names', () => {
     assert.equal(verse.isError, undefined);
     assert.equal(verse.content[0].text, '{}', 'the tool\'s JSON stays first');
     assert.deepEqual(seen.pop(), { book: 43, chapter: 3, verse: 16 });
-    assert.equal(verse.content.at(-1).text, 'Ignored arguments "fields", "limit": get_bible_verse takes book, chapter, verse.');
+    assert.equal(verse.content.at(-1).text, 'Ignored arguments "fields", "limit": get_bible_verse takes reference, book, chapter, verse, langwritten, pronunciation_marks.');
     const links = await callTool({ params: { name: 'getWorkbookLinks', arguments: JSON.parse('{"__proto__": 1, "constructor": 2, "toString": 3, "translation": "nwt"}') } }, { handlers });
     assert.equal(links.isError, undefined);
     const passed = seen.pop();
@@ -394,6 +422,10 @@ describe('argument names', () => {
     assert.match(links.content.at(-1).text, /^Ignored arguments "__proto__", "constructor", "toString", "translation": getWorkbookLinks takes langwritten, date, issue, fileformat\.$/);
     const many = await callTool({ params: { name: 'getWorkbookLinks', arguments: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`junk${i}`, i])) } }, { handlers });
     assert.match(many.content.at(-1).text, /"junk9" and 20 more: getWorkbookLinks takes/);
+    const real = await run('search_bible_books', { query: 'John', foo: 1 });
+    assert.equal(real.isError, undefined);
+    assert.equal(real.content.length, 2);
+    assert.match(real.content[1].text, /^Ignored argument "foo": search_bible_books takes query, limit, langwritten\.$/);
   });
 
   it('still accepts the hidden parameters', async () => {
@@ -405,9 +437,9 @@ describe('argument names', () => {
   });
 
   it('refuses two names for one parameter that disagree', async () => {
-    const result = await run('getWatchtowerLinks', { langwritten: 'S', language: 'French' });
+    const result = await run('get_bible_verse', { reference: 'John 3:16', langwritten: 'S', language: 'French' });
     assert.equal(result.isError, true);
-    assert.match(text(result), /"language" and "langwritten" disagree for getWatchtowerLinks/);
+    assert.match(text(result), /"language" and "langwritten" disagree for get_bible_verse/);
     assert.deepEqual(fetched, []);
   });
 });

@@ -114,7 +114,7 @@ Cloudflare settings that can block AI connectors. Check them for this hostname:
 
 ### Languages
 
-The workbook and Watchtower tools take `langwritten` (default `E`, English). It accepts:
+The Bible, workbook and Watchtower tools take `langwritten` (default `E`, English). It accepts:
 
 - a JW.org language code: `E` English, `S` Spanish, `F` French, `T` Portuguese (Brazil), `X` German, `I` Italian, `J` Japanese, `KO` Korean, `CHS` Chinese (Simplified), `U` Russian, and so on;
 - an ISO tag such as `es`, `pt-BR` or `zh-Hant` (region subtags are dropped when needed, so `es-MX` gives `S`);
@@ -128,46 +128,79 @@ An all-caps value that is both a built-in language's ISO tag and another languag
 
 The workbook and Watchtower tools accept `date` as `YYYY-MM-DD` and default to today on the server, in its local time zone. A server running in UTC (Docker) can be a day off from the user, so pass the user's local date when it matters.
 
-### Bible Scripture Tools
+### Bible
 
-#### `search_bible_books`
-Search for Bible books by name, abbreviation, or number.
+Bible text is the New World Translation from jw.org's study Bible data. If that source fails, `get_bible_verse` reads the verse text from wol.jw.org instead and says so in `note`.
+
+Every verse tool accepts either `reference` (a string, or an array of references read as a `;` list) or `book` + `chapter` + `verse`:
 
 ```json
-{ "query": "matthew" }
+{ "reference": "John 3:16" }
+{ "reference": "Ps. 83:18" }
+{ "reference": "1 Cor. 13:4-7" }
+{ "reference": "Psalm 23" }
+{ "book": 40, "chapter": 5, "verse": "3-5" }
 ```
 
+`book` is 1-66 (1-39 Hebrew Scriptures, 40-66 Christian Greek Scriptures). `verse` can be one verse (`"16"`), a range (`"16-18"`) or a list (`"1,3,5"`); leave it out for the whole chapter. In Psalms, verse `0` is the superscription. References are checked against NWT chapter and verse counts, and verses the NWT leaves out (such as Matthew 17:21) come back with `omitted: true` and a note explaining why. A range that runs into John 7:53–8:11 or Mark 16:9-20, which have no verse numbers in the NWT, is cut to the numbered verses with a note (`"John 7:53-8:20"` reads John 8:12-20), and a range that runs past the end of the chapter stops at its last verse with a note (`"John 3:16-100"` reads John 3:16-36). A trailing translation tag such as `NWT` or `(nwtsty)` is ignored, and so are part-verse letters (`"John 3:16b"`, `"16-17a"`, `"16ff"` read whole verses, with a note). The study notes' `", ftn."` ("see the footnote", as in `"Eph 4:11, ftn."` or `"2Pe 1:13; ftn."`) reads the verse and returns its footnotes, with a note when the current NWT has none there. `verse` sent with a whole-chapter `reference` picks its verses (`{"reference": "Psalm 83", "verse": "18"}` is Psalm 83:18); with a `reference` that already names other verses it is an error, as a disagreeing `book` or `chapter` is. A whole Mark 16 or John 7 notes that the chapter stops before the passage other Bibles print.
+
+Book names are read in English, and also in the `langwritten` language: with `"langwritten": "S"`, `"Juan 3:16"` and `"Salmo 23"` work, as do the references the tools return, including Arabic citations with Arabic-Indic digits and `،`/`؛` (`"روما ٥:٨؛ يوحنا ٦:٤٠"`) and Korean names with a digit inside (`"요한 1서 4:9"`, `"요1 4:8"`). The first call in a language learns its names from jw.org (one request) before it parses, so a local abbreviation that is also an English one (French `Éz`, Ezekiel, not Ezra) reads the same on every call.
+
+`get_bible_verse` and `get_verse_with_study` also take several references separated by `;` (or the full-width `；` of Chinese and Japanese text, or Arabic `؛`; up to 12, for example a verse's cross references): `{"reference": "Luke 10:25-28; Acts 17:26, 27; 1 John 5:20"}` returns `{reference, passages_count, passages: [...], langwritten}` with one result per reference. A reference that cannot be read (`"John 3:99"`, an unknown book) gets `{reference, error, hint}` in its place; the call is an error only when none can be read. Two references joined by `,` or `and` get a hint to use `;`.
+
+Each chapter is one cached request (the one jw.org's own chapter pages make), so a second verse of a chapter needs no new request. If jw.org's study Bible fails, the WOL fallback reads at most 4 chapter pages at a time and stops at the first failure; after a rate limit (HTTP 429) it sends nothing more.
+
 #### `get_bible_verse`
-Get plain verse text from wol.jw.org. Books are numbered 1-66 (1-39 OT, 40-66 NT).
+
+Verse text for a verse, range, list or whole chapter (up to 200 verses; a longer passage is an error that names where to split it, e.g. `Genesis 1-7`, then `Genesis 8-10`). Returns `{reference, book_number, book_name, chapter, verse, text, url, langwritten}`, plus `footnotes`, `heading`, `superscription` (Psalms) and `note` when they apply. Footnotes are `[{phrase, note}]`, where `phrase` is the words the footnote marker follows (`{"phrase": "He refreshes me", "note": "Or “my soul.”"}`). For one verse `footnotes` is at the top level, and a psalm's superscription brings its own as `superscription_footnotes`. For several verses, `text` numbers each verse (`"16 For God... 17 For God sent..."`), and `verses` lists only the verses with footnotes or left out, as `[{verse, footnotes?, omitted?}]` (with `chapter` when the passage spans chapters; verse `0` is a superscription's). Poetry (the Psalms, much of the prophets) keeps its printed lines, separated by `\n`. Acrostic letters (Psalm 119, Proverbs 31, Lamentations 1-4 and others) stand before the verse they head (`"8 I will observe... ב [Beth] 9 How can a young man..."`); one verse returns its letter in `heading`. A psalm's superscription is `superscription` when the passage stays inside that psalm, else `superscriptions` keyed by psalm (`{"23": "A melody of David."}`).
+
+Names keep the NWT's pronunciation marks (`Jo·haʹnan`), as jw.org prints them. `pronunciation_marks: false` removes them from verse text (`Johanan`) in English, German, Swedish, Dutch and Russian (`E`, `X`, `Z`, `O`, `U`); study notes keep them. The same option works in `get_verse_with_study`.
 
 ```json
-{ "book": 43, "chapter": 3, "verse": 16 }
+{ "reference": "John 3:16", "langwritten": "S" }
 ```
 
 #### `get_verse_with_study`
-Get verses with study notes, cross-references, and research articles. Supports ranges.
+
+Verses with study material from the NWT Study Edition: any one chapter, or up to 60 verses in up to 5 chapters (200 verses when `fields` are text-only: `verses`, `combined_text`, `footnotes`, `cross_references`, `chapter_level`). Choose content with `fields`:
+
+| Field | Content |
+|---|---|
+| `verses` (default) | `[{chapter, verse, text}]` |
+| `study_notes` (default) | `{verse: [{term, note}]}` and `has_study_notes`. In English, the Study Edition has notes for Matthew to James. |
+| `footnotes` (default) | `{verse: [{phrase, note}]}`; `phrase` is the words the marker follows |
+| `combined_text` | the passage as one numbered string (the same text as `verses`) |
+| `cross_references` | one entry per `+` marker, in the order the markers appear in the verse, as WOL shows them: `[{chapter, verse, phrase, targets}]`, where `phrase` is the words the marker follows (`"the only true God"`); a verse can have several. `cross_references_count` counts the references. |
+| `study_articles` | Research Guide entries `[{title, source, publication, url}]`, capped by `limit` (default 5; `0` or less, or anything above 100, means 100; a decimal is rounded down; `study_articles_total` gives the full count and `note` says how to get the rest). Outside English the Research Guide is a citation index, so `title` is the citation (`"Perspicacia, págs. 437"`). |
+| `chapter_level` | the chapter outline |
+| `chapter_articles` | Research Guide entries for the whole chapter `[{title, source, publication, url, verses}]`, capped by `limit`, returned in `chapter_level.study_articles` with `study_articles_total` (or `chapter_level.study_articles_same_as: "study_articles"` when the passage is the whole chapter and `study_articles` is also requested) |
 
 ```json
-{
-  "book": 40, "chapter": 5, "verse": "3-5",
-  "fields": ["verses", "study_notes", "study_articles"]
-}
+{ "reference": "Matt. 24:14", "fields": ["verses", "study_notes", "study_articles"] }
 ```
 
-Available fields: `verses`, `study_notes`, `study_articles`, `cross_references`, `chapter_level`, `combined_text`
+`fetch: true` skips the 6-hour cache. A result is kept under about 22,000 tokens, estimated from its text (Claude Code's default limit is 25,000 tokens; Japanese, Chinese and link-heavy text take more tokens a character than English): when a long passage with many fields would be larger, `combined_text` is dropped first, then the article lists are shortened to 5, then `cross_references` (the last verses' first; `note` says up to which verse), then the rest of the article lists, then `chapter_level.outline`, and `note` says what was cut. When even that is too long, the error names the largest fields and a verse range that fits (`John 1:1-26 fits with these fields`).
 
 ![Scripture Tools Demo](assets/images/scripture-tools-demo.png)
 
 #### `get_bible_verse_url`
-Generate JW.org URLs for verses, ranges, or chapters — useful for adding clickable links to documents.
+
+jw.org links for a reference, ready for markdown. Returns `{reference, url, markdown, langwritten}`. When the verses are not one passage (`"1,3,5"`, `"Matt. 5:3–6:4"`, or several references separated by `;`), `links` has one `{reference, url, markdown}` per passage. `langwritten` sets the language of the linked page. Links are built locally; only a language outside the built-in 19 needs one lookup of JW.org's language list, and a reference with `langwritten` other than English one lookup of that language's book names.
 
 ```json
-{ "book": 19, "chapter": 83, "verse": "18" }
+{ "reference": "Ps. 83:18; John 17:3" }
 { "book": 23, "chapter": 46, "verse": "9-11" }
-{ "book": 40, "chapter": 5 }
 ```
 
 ![Get Verse URL Example](assets/images/get-verse-url.png)
+
+#### `search_bible_books`
+
+Book numbers, chapter counts and JW.org abbreviations from a name, abbreviation or number (`"jn"`, `"1 Cor."`, `"Song of Songs"`, `"40"`). A full reference is parsed too. A near-miss spelling (`"Jhon"`) comes back with `match: "spelling_guess"` and a `note`; a name that is no book (`"Tobit"`) is an error. With `langwritten`, that language's book names match as well (`{"query": "Juan", "langwritten": "S"}`, with `local_name` in the result). A `limit` above 66, or `0` or less, returns every match; a decimal is rounded down. The verse tools take references directly, so this is rarely needed first.
+
+```json
+{ "query": "matt" }
+```
 
 ---
 
@@ -228,20 +261,29 @@ Also accepts full JW.org URLs — the video ID is extracted automatically.
 - A tool call that fails unexpectedly names the tool and ends with a `Next step:` hint (1.3.3 returned the bare JavaScript error).
 - Argument names are checked: `lang` and `language` mean `langwritten` on every tool that has it, and `link` means `url`. An argument that looks like a misspelt parameter (`langauge`, `field` for `fields`) or a language under another name (`locale`, `wtlocale`) is an error that names the parameter you probably meant. Any other unknown argument is ignored, as in 1.3.3, and the result ends with a note naming it.
 
+- `reference` strings follow jw.org style: `Psalm 83:18` (was `Psalms 83:18`; `book_name` is still `Psalms`), `John 3:16, 17` for two verses in a row (was `John 3:16-17`), and `Jude 3` for one-chapter books (was `Jude 1:3`).
+- `get_bible_verse` `text` no longer starts with the verse number or contains `+` cross-reference markers. For several verses `text` numbers each verse and `verses` lists only the verses with footnotes or left out (`[{verse, footnotes?, omitted?}]`).
+- `get_bible_verse` `verse` is a string in the input schema (`"16"`, `"16-18"`, `"1,3,5"`), as in the other verse tools; it was a number in 1.3. The server still accepts a number such as `16`, but a client that validates arguments against the schema before sending must send a string, or pass `reference` (`"John 3:16"`).
+- `get_bible_verse_url` returns JSON `{reference, url, markdown, ...}` instead of a bare URL.
+- `get_verse_with_study` returns `verses` as `[{chapter, verse, text}]` (was `book_num`, `book_name`, `verse_num`, `verse_text`), includes footnotes by default, and `study_notes_count` now counts notes rather than verses. `cross_references` has one entry per reference marker (`[{chapter, verse, phrase, targets}]`), so a verse can have several.
+- `get_verse_with_study` `study_notes` values are `[{term, note}]` objects (were `"term: note"` strings), and `study_articles` entries are `{title, source, publication, url, verses}` (no `type`).
+- `get_verse_with_study`: `chapter_level` now holds only the chapter outline. The chapter's Research Guide articles (1.3's `chapter_level.study_articles`) come back only when `fields` includes `chapter_articles`. They are deduplicated `{title, source, publication, url, verses}`, capped by `limit` (default 5, `0` = 100), with `study_articles_total`. `chapter_level.cross_references`, which was always empty in 1.3, is gone; use the `cross_references` field.
+- `get_verse_with_study` `limit` takes any number as before (a decimal is rounded down; `0` or less means 100), but returns at most 100 articles; `study_articles_total` gives the full count and `note` says how to see the rest.
+- `footnotes` (new) are `[{phrase, note}]` objects, and verse `text` keeps poetic line breaks (`\n`).
 - Workbook and Watchtower link entries no longer carry `filesize`, `checksum`, `modifiedDatetime` or `track` (use `week`). Content results for a `url` no longer carry `contentType`, `originalSize` or `parsedSize`, and `parsedText` no longer has the "Your answer" placeholder lines. The Content tools take `date`, `issue` + `week` or `langwritten` directly, so the Links step is optional. Their JSON results are compact (no indentation).
 - `langwritten` also accepts ISO tags and names, and a two-letter all-caps value that is both a built-in ISO tag and another language's JW.org code is read as the ISO tag: `TL` is Tagalog (was Tamil), `RU` Russian (was Kirundi), and likewise `EN`, `FR`, `IT`, `JA`, `UK`, `VI`, `ID`, `AR`. The result's `note` says so; pass the language name (`Tamil`) or ISO tag (`ta`) for the other language.
-- The workbook and Watchtower helpers `getWorkbookLinks`/`getWorkbookContent` (workbook-tools.js), `getWatchtowerLinks`/`getWatchtowerContent` (watchtower-tools.js), `downloadRtfContent`, `fetchPublicationData`, `getCurrentIssue`, `getCurrentWatchtowerIssue` and `workbookIssue` (rtf-utils.js) are gone. jw-mcp is an MCP server, not a library: call the tools instead.
+- The internal helpers `getWorkbookLinks`/`getWorkbookContent` (workbook-tools.js), `getWatchtowerLinks`/`getWatchtowerContent` (watchtower-tools.js), `downloadRtfContent`, `fetchPublicationData`, `getCurrentIssue`, `getCurrentWatchtowerIssue` and `workbookIssue` (rtf-utils.js) and `WOLScraper`/`scraper` (wol-scraper.js) are gone. jw-mcp is an MCP server, not a library: call the tools instead.
 
-All tool names and earlier parameter names still work.
+All tool names and earlier parameter names still work (see the `verse` type note above).
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `JW_MCP_FETCH_TIMEOUT_MS` | `20000` | Time limit for each request to JW.org, including reading the response (max 600000; a larger value is capped with a warning). The workbook and Watchtower tools also have an overall budget per call: twice this value, at least 50 s. |
+| `JW_MCP_FETCH_TIMEOUT_MS` | `20000` | Time limit for each request to JW.org, including reading the response (max 600000; a larger value is capped with a warning). Tools that make several requests also have an overall budget per call: twice this value (at least 50 s for the workbook and Watchtower tools). |
 | `MCP_TRANSPORT` | `stdio` | `http` for the Docker/remote mode described above. |
 
-Results from JW.org are cached in memory: workbook and Watchtower listings and files for 1 hour, and the language list for a day.
+Results from JW.org are cached in memory: Bible data for 6 hours, workbook and Watchtower listings and files for 1 hour, and the language list for a day.
 
 ## Troubleshooting
 

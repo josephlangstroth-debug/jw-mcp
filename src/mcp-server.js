@@ -19,7 +19,8 @@ import { errorResult, errorToResult } from './tools/results.js';
 
 const { version: SERVER_VERSION } = createRequire(import.meta.url)('../package.json');
 
-// Every tool only reads public JW.org content.
+// Every tool only reads public JW.org content. The book and link tools answer
+// from local tables but fetch a language's book names when langwritten is set.
 const TOOL_META = {
   search_bible_books: { title: 'Find Bible Books' },
   get_bible_verse: { title: 'Bible Verse Text' },

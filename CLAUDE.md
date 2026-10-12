@@ -30,8 +30,9 @@ src/
     ├── songbook.js           # "Sing Out Joyfully": song video keys (pub-sjjm_<n>_VIDEO) -> WOL lyrics docid
     ├── languages.js          # resolveLanguage(): JW code / ISO tag / name -> code, jw.org path, WOL r/lp
     ├── scripture-tools.js    # search_bible_books, get_bible_verse, get_verse_with_study, get_bible_verse_url
-    ├── bible-books.js        # Bible book utilities & data
-    ├── wol-scraper.js        # Web scraper for wol.jw.org
+    ├── bible-books.js        # Offline book/chapter/verse tables, reference parser, finder links
+    ├── bible-api.js          # jw.org study-Bible JSON: verses, notes, footnotes, cross refs, outlines
+    ├── wol-scraper.js        # WOL Bible chapter pages: Research Guide articles, fallback verse text
     ├── workbook-tools.js     # getWorkbookLinks, getWorkbookContent
     ├── watchtower-tools.js   # getWatchtowerLinks, getWatchtowerContent
     ├── rtf-utils.js          # Shared periodicals logic: issue/week rules, pub-media listings, file download
@@ -98,7 +99,7 @@ Rules:
 
 - Every failure the caller can cause or hit (bad input, 404, timeout, unexpected markup) must come back as `isError: true` with a message that says what failed and a hint that says what to do next. Throw `ArgError` (args.js; its hint defaults to `Fix "param" and call again.`), `ToolError` (results.js) or let `JwFetchError` (http.js) through; `wrapTool` turns them into `message\nNext step: hint`. Never return an error-ish payload with `isError` unset.
 - Lookup tables keyed by caller or upstream text are object literals with `__proto__: null` (or `Map`s), so `constructor` and friends miss.
-- A result should stay under about 22,000 tokens (`MAX_RESULT_TOKENS`; Claude Code cuts tool results at 25K tokens). Budget by `estimateTokens` (results.js), not characters: Japanese and Chinese run about one token a character, URLs and citations about two. Page text with `pageByTokens` (`offset`/`next_offset`, at most `PAGE_TOKENS` a page), or shorten and say so in `note`.
+- A result should stay under about 22,000 tokens (`MAX_RESULT_TOKENS`; Claude Code cuts tool results at 25K tokens). Budget by `estimateTokens` (results.js), not characters: Japanese and Chinese run about one token a character, URLs and citations about two. Page text with `pageByTokens` (`offset`/`next_offset`, at most `PAGE_TOKENS` a page), or shorten and say so in `note` (see `fitStudyResult` in scripture-tools.js).
 - Fetch with `http.js` (`fetchText`, `fetchJson`, `fetchResource`), never `fetch` directly. Pass `deadline` when a call makes more than one request.
 - Cache parsed results, not raw pages: `cached(key, ttlMs, loader, { cache })` with a module-level `TtlLruCache` for large values. Prefix keys with the area and include the language.
 - Content tools take `langwritten` (default `E`) and resolve it with `resolveLanguage` (`isMissing(v) ? 'E' : v`).
@@ -152,7 +153,7 @@ npm run test:coverage  # auth and HTTP tests with c8 thresholds
 
 ### MCP Server (`src/mcp-server.js`)
 
-- `allTools` adds a `title` and `annotations` (`readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true`) to every tool definition.
+- `allTools` adds a `title` and `annotations` (`readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true`) to every tool definition. Even the book and link tools fetch a language's book names when `langwritten` is set.
 - `callTool()` handles every `tools/call`: it checks `arguments ?? {}` against the tool's schema (`normalizeArgs`): `lang`/`language` become `langwritten` on tools that have it, `TOOL_ALIASES` maps per-tool names (`link` -> `url`, captions' `url`/`lank` -> `video_id`), `HIDDEN_PARAMS` lists accepted keys left out of the schema (1.3.3's `pub`, `max_chars`), a key within edit distance 1 (names of 4 characters or fewer) or 2 of a parameter, or a lang/locale-like key on a tool with `langwritten`, is an `isError` result naming the likely parameter, and any other key is dropped and listed in a trailing "Ignored argument ..." text block (1.3.3 ignored them; `content[0]` stays the tool's JSON). Then it passes the arguments to the handlers, turns a thrown error into an `isError` result (`errorToResult`) and answers an unknown tool name with an `isError` result listing the real tools. It never throws to the SDK.
 
 ### OAuth Authentication (`src/auth.js`)
@@ -178,10 +179,11 @@ When `MCP_AUTH` is not `false` and `MCP_AUTH_SECRET` is set:
 `resolveLanguage(input)` accepts a JW.org code (`E`, `S`, `CHS`), an ISO tag (`es`, `pt-BR`, `zh-Hant`) or a name (`Spanish`, `español`) and returns `{code, iso, name, jwPath, wol: {r, lp, path}, ...}`. 19 built-in languages never touch the network; any other is looked up in the mediator language list and the WOL finder (cached a day). The built-in table is searched before the full list, and in each, all-uppercase input is read as a JW code first, anything else as an ISO tag first, so free-text `TL` is Tagalog (ISO `tl`); for the ten all-caps ISO tags that are also another language's JW code (`ISO_CODE_CLASHES`: `TL`, `RU`, `EN`, ...) the entry carries a `note`, which the tools put first in the result's `note`. Names ignore word order and parentheses (`Traditional Chinese` = `Chinese (Traditional)`), and a miss suggests up to three directory names. Pass `deadline` from a tool's call budget. A value that is certainly a JW code (an entry's `code`, `wtlocale=`, a key's language) must be resolved with `resolveLanguage(code, { as: 'code' })`, which matches codes only: `TL` is then Tamil. `wolUrl(lang, type, ...)` builds WOL URLs; `wol` is null for languages without a WOL library.
 
 ### Bible Scripture Tools
-- Use `bible-books.js` for book number/name mappings (1-66)
-- Use `wol-scraper.js` for fetching content from wol.jw.org
-- Book numbers: 1-39 (Old Testament), 40-66 (New Testament)
-- Bible verse URLs use jw.org/finder format with zero-padded encoding (e.g., book 19, chapter 83, verse 18 → `19083018`)
+- `bible-books.js` is offline: book names and abbreviations, NWT chapter and verse counts (John 7 has 52 verses, Mark 16 has 8), the 16 omitted verses and the two passages without verse numbers (a range that runs into one is trimmed, with a note), the reference parser (`referencesFromArgs(args, { lang })`) and jw.org finder links. Arguments longer than 100 (book) or 1000 (verse, reference) characters are refused before any regex runs. `registerBookNames(code, editionData.books)` teaches it a language's names; with `lang`, a local name exactly as written beats an English alias (French `Éz` is Ezekiel), which beats an accent-folded local name (Vietnamese `Dan.` is Daniel, not `Dân`). The scripture tools load the names (`loadBookNames`, one cached request) before they parse a reference with letters in it, so the result never depends on call order. Part-verse letters (`16b`, `16ff`) are dropped with a note; a `;` list can come as an array (`referenceListText`). `normalizeReferenceText` reads reference text the way the parser does (NFKC, Arabic-Indic digits and `،`/`؛` as ASCII, every dash as `-`); local names with a digit after a letter (Korean `요한 1서`, `요1`) are matched first (`digitNames`). The study notes' `, ftn.` / `; ftn.` sets `ref.footnote` (the verse's footnotes are returned, with a note when there are none). `verse` with a whole-chapter `reference` selects its verses; otherwise it must match (`applyVerse`).
+- `bible-api.js` reads jw.org's study-Bible JSON (`/<lang>/library/bible/study-bible/books/json/data/<BBCCC000-BBCCC999>`), one whole chapter per request: the id jw.org's own chapter pages request, so the CDN keeps it warm, and a second verse of a chapter comes from the cache. It is the main source for verse text, study notes, footnotes (with the `phrase` their marker follows), cross references and outlines (`getBibleDataMany` serves a `;` list, 4 chapters at a time). Poetry (`style-l`/`style-z` lines) keeps one line per `\n` and sets `poetry: true` on the verse. Cross references and footnotes are sorted by the position of their markers in the verse (jw.org's lists are often out of order). Pinyin/furigana `<ruby>` readings are dropped and CJK lines joined without spaces. When it fails, `get_bible_verse` reads WOL chapter pages instead, at most 4 at a time (`mapPool`), stopping at the first 429/5xx/timeout; a 429 gets no fallback at all. Fields of the wrong type are read as empty; unusable verses are a `bad_content` JwFetchError, so the WOL text fallback runs.
+- `wol-scraper.js` reads WOL Bible chapter pages for the Research Guide (`study_articles`) and as the fallback for verse text. English pages pair a title link with an unlinked citation; other languages use a citation index (every line a link, publication in `<em>`/`<strong>`, `p.sk` issue lines grouped under a `p.su` publication line), where the citation becomes the title. Arabic items hold both (titled pairs first, then an index). The verse-text fallback keeps poetry lines (`p.sl`/`p.sz`, `poetry`) and joins prose segments with `joinText`.
+- Book numbers: 1-39 Hebrew Scriptures, 40-66 Christian Greek Scriptures. Finder links encode `BBCCCVVV` (book 19, chapter 83, verse 18 → `19083018`); a whole chapter is `BBCCC000`.
+- In English the Study Edition has study notes for Matthew to James only.
 
 ### Meeting Workbook and Watchtower (`rtf-utils.js`)
 - A week (Monday to Sunday) belongs to the month of its Monday.
@@ -225,7 +227,7 @@ Docker image published to `ghcr.io/advenimus/jw-mcp` on each release. Environmen
 | `MCP_TRUST_PROXY` | No | unset | Set `true` only when exactly one proxy (Caddy, nginx, Cloudflare Tunnel) sets or appends the client IP in `X-Forwarded-For`. Trusts one hop. |
 | `AUTH_STORE_PATH` | No | `/data/auth.json` in Docker | File store for clients and tokens |
 | `CLOUDFLARE_TUNNEL_TOKEN` | No | — | Token for the optional `cloudflared` compose service (`--profile tunnel`) |
-| `JW_MCP_FETCH_TIMEOUT_MS` | No | `20000` | Time limit per JW.org request, including reading the body (max 600000); a workbook or Watchtower call's budget is twice this, at least 50 s |
+| `JW_MCP_FETCH_TIMEOUT_MS` | No | `20000` | Time limit per JW.org request, including reading the body (max 600000); a tool call's budget is twice this (at least 50 s for the periodicals) |
 
 ## Language Support
 

@@ -25,19 +25,19 @@
   "tools": [
     {
       "name": "search_bible_books",
-      "description": "Search for Bible books by name, abbreviation, or number"
+      "description": "Look up Bible books by name, abbreviation or number"
     },
     {
       "name": "get_bible_verse",
-      "description": "Get plain Bible verse text from wol.jw.org"
+      "description": "Get New World Translation verse text in many languages"
     },
     {
       "name": "get_verse_with_study",
-      "description": "Get comprehensive study content for Bible verses including study notes, cross-references, and research articles"
+      "description": "Get verses with study notes, footnotes, cross references and research articles"
     },
     {
       "name": "get_bible_verse_url",
-      "description": "Generate JW.org URLs for Bible verses, ranges, or chapters"
+      "description": "Build jw.org links for Bible references"
     },
     {
       "name": "getWorkbookLinks",
