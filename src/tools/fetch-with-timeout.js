@@ -1,8 +1,4 @@
 // Timeout defaults, default headers and the JwFetchError classes used by http.js.
-// fetchWithTimeout at the end is the 1.3.3 helper, kept until the last tool
-// that still calls it moves to http.js.
-
-import fetch from 'node-fetch';
 
 const FALLBACK_TIMEOUT_MS = 20000;
 
@@ -92,21 +88,4 @@ export function hostOf(url) {
 export function seconds(ms) {
   const s = ms / 1000;
   return `${Number.isInteger(s) ? s : s.toFixed(1)} s`;
-}
-
-/**
- * 1.3.3's fetch with a time limit (node-fetch v3 ignores its `timeout`
- * option, so AbortSignal is the only way to stop a hung request). New code
- * uses http.js.
- */
-export async function fetchWithTimeout(url, options = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
-  try {
-    return await fetch(url, { ...options, signal: AbortSignal.timeout(timeoutMs) });
-  } catch (error) {
-    // node-fetch raises AbortError; a native abort raises TimeoutError.
-    if (error.name === 'AbortError' || error.name === 'TimeoutError') {
-      throw new FetchTimeoutError(url, timeoutMs);
-    }
-    throw error;
-  }
 }

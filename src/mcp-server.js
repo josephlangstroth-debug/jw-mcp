@@ -70,13 +70,14 @@ const TOOL_ALIASES = {
   getWatchtowerContent: { __proto__: null, link: 'url' }
 };
 // Accepted but left out of the schema: 1.3.3's pub, max_chars to keep
-// tools/list small.
+// tools/list small, captions' wtlocale (always read as a JW code).
 const HIDDEN_PARAMS = {
   __proto__: null,
   getWorkbookLinks: ['pub'],
   getWatchtowerLinks: ['pub'],
   getWorkbookContent: ['max_chars'],
-  getWatchtowerContent: ['max_chars']
+  getWatchtowerContent: ['max_chars'],
+  get_jw_captions: ['wtlocale']
 };
 const toolsByName = new Map(allTools.map((t) => [t.name, t]));
 

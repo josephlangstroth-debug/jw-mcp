@@ -22,7 +22,7 @@ src/
 ├── auth/                 # Login page, CIMD, token store
 └── tools/
     ├── http.js               # fetchText/fetchJson/fetchResource: timeouts, host allowlist, size cap, JwFetchError
-    ├── fetch-with-timeout.js # Timeout defaults, default headers and error classes used by http.js; 1.3.3's fetchWithTimeout
+    ├── fetch-with-timeout.js # Timeout defaults, default headers and error classes used by http.js
     ├── cache.js              # TtlLruCache and cached() (shared loads, failures not cached)
     ├── args.js               # Argument helpers (toInt, toStr, toEnum, toIsoDate, ...) that throw ArgError
     ├── results.js            # textResult/jsonResult/errorResult, ToolError, wrapTool(), token estimate and pageText
@@ -198,6 +198,9 @@ When `MCP_AUTH` is not `false` and `MCP_AUTH_SECRET` is set:
 ### RTF Parsing
 `rtf-parser.js` keeps the published text verbatim: one line per paragraph, a blank line before headings, `\line` as a space, bullets as `•`, table cells joined with ` | `. Its output matches LibreOffice's text export word for word. Parsed text is about 22-27% of the RTF size. Do not post-process it with heuristics. `parseRTFDocument()` also returns the title, headings and links.
 
+### Captions (`captions-tool.js`)
+Mediator `media-items/<code>/<key>?clientType=www`, then the WebVTT file on `*.jw-cdn.org`. A docid or page link may need the finder or the page HTML first; a category link or `latest:<Category>` reads `categories/<code>/<Category>?clientType=www`: `LatestVideos` and `StudioMonthlyPrograms` list newest first (`limit=6`, more for `~N`), other categories are in jw.org's curated order, so they are read whole (`limit=100`, up to 5 pages) and sorted by `firstPublished`. The note lists the five videos before the one returned; `latest:<Category>~N` and "previous ..." read further back, and "August 2026 broadcast" pages `StudioMonthlyPrograms` by `firstPublished`. A group of categories (`type: container`) lists its categories only with `detailed=1`. Free text such as "latest morning worship" maps to a key through `CATEGORY_ALIASES`; a camel-case key is used as given. "last/this month's broadcast" and a month without a year ("September broadcast") are dated by `parseVideoReference(input, { now })` (default: the server's local date); other categories are not found by date. Category listings are cached as slim items (`slimItem`: key, title, string firstPublished, trimmed media), and every `~N` within the same pages shares one listing. "Governing Body update" is a `SERIES` within `StudioNewsReports`: only the items whose English title is "<year> Governing Body Update #n" count (excerpts and news reports share the category), matched across languages by `languageAgnosticNaturalKey`. One 40 s deadline covers the call. The result is a JSON metadata block plus the transcript as a second text block; a video with no caption file returns metadata with `captions_available: false` (not an error); for a song video (`songbook.js`) its `next_step` names the lyrics page. Parts default to 60,000 characters (a monthly program), at most 80,000 (50,000 for vtt) and `PAGE_TOKENS`, and a longer transcript is split into equal parts. Wrapped lines inside a cue join tight in CJK; English captions (`closedDashes`, keyed on the captions' language) join at a closed em dash; cue breaks stay a space unless the cue ends in CJK punctuation (JW's Japanese captions have no `。`). Identical cues are merged only when they overlap in time (repeated lyrics and replies stay), and the text formats drop the opening quotation marks English captions repeat at the start of every cue of an open quotation (`dropContinuationMarks`).
+
 ## MCP Response Format
 
 Implementations wrapped with `wrapTool` can return:
@@ -231,8 +234,4 @@ Docker image published to `ghcr.io/advenimus/jw-mcp` on each release. Environmen
 
 ## Language Support
 
-All tools support multiple languages via the `langwritten` parameter:
-- `E` - English (default)
-- `S` - Spanish
-- `F` - French
-- And many others per JW.org availability
+Every content tool takes `langwritten` (default `E`): a JW.org code (`E` English, `S` Spanish, `F` French, `T` Portuguese, `X` German, `J` Japanese, `KO` Korean, `CHS` Chinese Simplified, ...), an ISO tag (`es`) or a language name (`Spanish`). `search_bible_books` takes it only to match that language's book names. `get_jw_captions` defaults to the language in the link. Not every publication exists in every language; the tools say so in an `isError` result.

@@ -29,7 +29,8 @@ const REALISTIC = {
   getWorkbookLinks: {},
   getWorkbookContent: {},
   getWatchtowerLinks: {},
-  getWatchtowerContent: {}
+  getWatchtowerContent: {},
+  get_jw_captions: { video_id: 'pub-jwb-142_1_VIDEO' }
 };
 
 // Bad input for each tool, and a pattern the error must contain.
@@ -70,6 +71,11 @@ const GARBAGE = {
   getWatchtowerContent: [
     [{ week: 'two' }, /"week"/],
     [{ url: 'file:///etc/passwd' }, /"url"/]
+  ],
+  get_jw_captions: [
+    [{ video_id: 'pub-x_1_VIDEO', format: 'mp4' }, /"format"/],
+    [{ video_id: 'not a video at all' }, /Could not find a JW.org video/],
+    [{ video_id: {} }, /"video_id"/]
   ]
 };
 
@@ -213,6 +219,7 @@ describe('tools/list', () => {
     assert.match(byName.getWorkbookContent, /getWorkbookLinks/);
     assert.match(byName.getWatchtowerLinks, /getWatchtowerContent/);
     assert.match(byName.getWatchtowerContent, /getWatchtowerLinks/);
+    assert.match(byName.get_jw_captions, /next_offset/);
   });
 
   it(`stays under ${MAX_TOOLS_LIST_CHARS} characters`, () => {
@@ -389,8 +396,9 @@ describe('argument names', () => {
     const { seen, handlers } = spy();
     const link = 'https://cfp2.jw-cdn.org/a/abc123/1/o/mwb_E_202609_04.rtf';
     await callTool({ params: { name: 'getWorkbookContent', arguments: { link } } }, { handlers });
-    await callTool({ params: { name: 'get_jw_captions', arguments: { link: 'https://www.jw.org/finder?wtlocale=E&lank=pub-jwb-142_1_VIDEO' } } }, { handlers });
-    assert.deepEqual(seen, [{ url: link }, { video_id: 'https://www.jw.org/finder?wtlocale=E&lank=pub-jwb-142_1_VIDEO' }]);
+    assert.deepEqual(seen, [{ url: link }]);
+    await run('get_jw_captions', { link: 'https://www.jw.org/finder?wtlocale=E&lank=pub-jwb-142_1_VIDEO' });
+    assert.ok(fetched.some((u) => u.includes('pub-jwb-142_1_VIDEO')), fetched.join('\n'));
   });
 
   it('refuses a probable misspelling or a language under another name, before fetching', async () => {

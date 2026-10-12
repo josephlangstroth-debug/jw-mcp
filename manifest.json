@@ -57,7 +57,7 @@
     },
     {
       "name": "get_jw_captions",
-      "description": "Fetch video captions and metadata from JW.org"
+      "description": "Get a JW.org video transcript and metadata"
     }
   ],
   "compatibility": {

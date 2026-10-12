@@ -114,7 +114,7 @@ Cloudflare settings that can block AI connectors. Check them for this hostname:
 
 ### Languages
 
-The Bible, workbook and Watchtower tools take `langwritten` (default `E`, English). It accepts:
+Every content tool takes `langwritten` (default `E`, English). It accepts:
 
 - a JW.org language code: `E` English, `S` Spanish, `F` French, `T` Portuguese (Brazil), `X` German, `I` Italian, `J` Japanese, `KO` Korean, `CHS` Chinese (Simplified), `U` Russian, and so on;
 - an ISO tag such as `es`, `pt-BR` or `zh-Hant` (region subtags are dropped when needed, so `es-MX` gives `S`);
@@ -127,6 +127,12 @@ An all-caps value that is both a built-in language's ISO tag and another languag
 ### Dates
 
 The workbook and Watchtower tools accept `date` as `YYYY-MM-DD` and default to today on the server, in its local time zone. A server running in UTC (Docker) can be a day off from the user, so pass the user's local date when it matters.
+
+### Errors
+
+Every failure is a normal tool result with `isError: true`. The message says what failed, and a `Next step:` line says how to fix the call, for example `John has 21 chapters, so there is no chapter 22.` followed by `Next step: Use a chapter from 1 to 21.`
+
+---
 
 ### Bible
 
@@ -240,16 +246,21 @@ List the weeks (workbook) or articles (Watchtower) of one issue, by default the 
 
 ---
 
-### Video Caption Tools
+### Video transcripts
 
 #### `get_jw_captions`
-Fetch video captions and metadata by video ID or any JW.org URL.
+
+A video's transcript and metadata. `video_id` takes a media key (`pub-jwb-142_1_VIDEO`, `docid-502014331_1_VIDEO`), a docid number, or any jw.org video link (a `finder?lank=` or `finder?docid=` share link, an address-bar link such as `www.jw.org/en/library/videos/#en/mediaitems/...`, or a video page; `https://` is optional). A category link (`#en/categories/<Category>`) or `latest:<Category>` reads that category's newest video by publish date, and the note lists the keys of the five before it; `latest:<Category>~N` (or `"previous broadcast"`) reads the Nth before the newest, and `"August 2026 broadcast"` the monthly program first published that month; `"September broadcast"` is the latest September up to today, and `"this month's broadcast"` and `"last month's broadcast"` count from the server's local date. Other categories are not found by date (`"last week's morning worship"` is an error that suggests `"latest morning worship"`, whose note lists the earlier keys with dates). `"latest broadcast"` or `latest:StudioMonthlyPrograms` is the newest JW Broadcasting monthly program, `"latest morning worship"` (`latest:VODPgmEvtMorningWorship`), `"latest Governing Body update"` (the newest video titled "<year> Governing Body Update #n" in `StudioNewsReports`, skipping news reports and excerpts) or `"latest news"` (`latest:StudioNewsReports`, the whole category) and `"latest talk"` (`latest:StudioTalks`) work the same way, and `"latest"` is the newest video on jw.org. A category key such as `VODProgramsEvents` is read as given. A group of categories is an error that lists its categories.
 
 ```json
-{ "video_id": "pub-jwbvod25_17_VIDEO" }
+{ "video_id": "https://www.jw.org/finder?wtlocale=E&lank=pub-jwb-142_1_VIDEO" }
+{ "video_id": "pub-jwb-142_1_VIDEO", "langwritten": "S", "format": "plain" }
+{ "video_id": "latest broadcast" }
 ```
 
-Also accepts full JW.org URLs — the video ID is extracted automatically.
+The result has two text blocks: a JSON metadata block (`title`, `key`, `language`, `duration`, `published`, `category`, `url`, `truncated`, `next_offset`, ...) and the transcript as paragraphs with `[m:ss]` time markers. `format` is `text` (default), `plain` (no markers) or `vtt` (the raw WebVTT file). Long programs come in parts of `max_chars` (default 60000, enough for a monthly program; at most 80000, and 50000 for `vtt`) and about 20,000 tokens, so Japanese and Chinese transcripts come in shorter parts: when `truncated` is true, call again with `offset` = `next_offset`. A longer transcript is split into parts of about equal size. In Japanese and Chinese transcripts a caption break without punctuation is kept as a space, since JW's captions often have no `。`. A line said or sung again keeps every repeat, and the opening quotation marks English captions repeat at the start of each caption show once (`format: "vtt"` stays as JW.org wrote it).
+
+`langwritten` defaults to the language in the link, else English. If the video has no captions in that language, English captions are returned with a note: the title and link stay those of the requested language's video, and `captions_language` is `"E"`. A video with no caption file at all (for example, subtitles burned into the picture) returns its metadata with `captions_available: false`, the reason and a `next_step`. Song videos (`pub-sjjm_..._VIDEO`) show the words on screen and have no caption file in any language, so their `next_step` gives the song's lyrics page in the songbook. English transcripts close an em dash that a caption break split (`facing—anxious times`); Spanish and French keep their spaced dashes.
 
 ![Video Captions Example](assets/images/get-video-captions.png)
 
@@ -258,9 +269,7 @@ Also accepts full JW.org URLs — the video ID is extracted automatically.
 ## Upgrading from 1.3
 
 - Node.js 20.18.1 or newer is required (it was 18).
-- A tool call that fails unexpectedly names the tool and ends with a `Next step:` hint (1.3.3 returned the bare JavaScript error).
-- Argument names are checked: `lang` and `language` mean `langwritten` on every tool that has it, and `link` means `url`. An argument that looks like a misspelt parameter (`langauge`, `field` for `fields`) or a language under another name (`locale`, `wtlocale`) is an error that names the parameter you probably meant. Any other unknown argument is ignored, as in 1.3.3, and the result ends with a note naming it.
-
+- JSON results are compact (no indentation).
 - `reference` strings follow jw.org style: `Psalm 83:18` (was `Psalms 83:18`; `book_name` is still `Psalms`), `John 3:16, 17` for two verses in a row (was `John 3:16-17`), and `Jude 3` for one-chapter books (was `Jude 1:3`).
 - `get_bible_verse` `text` no longer starts with the verse number or contains `+` cross-reference markers. For several verses `text` numbers each verse and `verses` lists only the verses with footnotes or left out (`[{verse, footnotes?, omitted?}]`).
 - `get_bible_verse` `verse` is a string in the input schema (`"16"`, `"16-18"`, `"1,3,5"`), as in the other verse tools; it was a number in 1.3. The server still accepts a number such as `16`, but a client that validates arguments against the schema before sending must send a string, or pass `reference` (`"John 3:16"`).
@@ -269,10 +278,14 @@ Also accepts full JW.org URLs — the video ID is extracted automatically.
 - `get_verse_with_study` `study_notes` values are `[{term, note}]` objects (were `"term: note"` strings), and `study_articles` entries are `{title, source, publication, url, verses}` (no `type`).
 - `get_verse_with_study`: `chapter_level` now holds only the chapter outline. The chapter's Research Guide articles (1.3's `chapter_level.study_articles`) come back only when `fields` includes `chapter_articles`. They are deduplicated `{title, source, publication, url, verses}`, capped by `limit` (default 5, `0` = 100), with `study_articles_total`. `chapter_level.cross_references`, which was always empty in 1.3, is gone; use the `cross_references` field.
 - `get_verse_with_study` `limit` takes any number as before (a decimal is rounded down; `0` or less means 100), but returns at most 100 articles; `study_articles_total` gives the full count and `note` says how to see the rest.
-- `footnotes` (new) are `[{phrase, note}]` objects, and verse `text` keeps poetic line breaks (`\n`).
-- Workbook and Watchtower link entries no longer carry `filesize`, `checksum`, `modifiedDatetime` or `track` (use `week`). Content results for a `url` no longer carry `contentType`, `originalSize` or `parsedSize`, and `parsedText` no longer has the "Your answer" placeholder lines. The Content tools take `date`, `issue` + `week` or `langwritten` directly, so the Links step is optional. Their JSON results are compact (no indentation).
+- `get_jw_captions` no longer has a `subtitles` field with the raw VTT. The transcript is the second text block; pass `format: "vtt"` for the raw file. 1.3.3 returned the whole transcript in one result; a long one now comes in parts of `max_chars` (default 60000, at most 80000; 50000 for `vtt`): when `truncated` is true, call again with `offset` = `next_offset`.
+- `get_jw_captions` follows the language of the link: a share link with `wtlocale=S` now gives the Spanish title and transcript, where 1.3.3 always returned English. Pass `langwritten: "E"` for English.
+- Workbook and Watchtower link entries no longer carry `filesize`, `checksum`, `modifiedDatetime` or `track` (use `week`). Content results for a `url` no longer carry `contentType`, `originalSize` or `parsedSize`, and `parsedText` no longer has the "Your answer" placeholder lines. The Content tools take `date`, `issue` + `week` or `langwritten` directly, so the Links step is optional.
+- Errors are `isError` results with a `Next step:` hint, including "no match" from `search_bible_books`.
 - `langwritten` also accepts ISO tags and names, and a two-letter all-caps value that is both a built-in ISO tag and another language's JW.org code is read as the ISO tag: `TL` is Tagalog (was Tamil), `RU` Russian (was Kirundi), and likewise `EN`, `FR`, `IT`, `JA`, `UK`, `VI`, `ID`, `AR`. The result's `note` says so; pass the language name (`Tamil`) or ISO tag (`ta`) for the other language.
-- The internal helpers `getWorkbookLinks`/`getWorkbookContent` (workbook-tools.js), `getWatchtowerLinks`/`getWatchtowerContent` (watchtower-tools.js), `downloadRtfContent`, `fetchPublicationData`, `getCurrentIssue`, `getCurrentWatchtowerIssue` and `workbookIssue` (rtf-utils.js) and `WOLScraper`/`scraper` (wol-scraper.js) are gone. jw-mcp is an MCP server, not a library: call the tools instead.
+- Argument names are checked: `lang` and `language` mean `langwritten` on every tool, and `link` means `url`. An argument that looks like a misspelt parameter (`referense`, `langauge`, `field` for `fields`) or a language under another name (`locale`, `wtlocale`) is an error that names the parameter you probably meant. Any other unknown argument is ignored, as in 1.3.3, and the result ends with a note naming it.
+- `footnotes` (new) are `[{phrase, note}]` objects, and verse `text` keeps poetic line breaks (`\n`).
+- jw-mcp is an MCP server, not a library. Deep imports of the old internal helpers break: `getWorkbookLinks`/`getWorkbookContent` (workbook-tools.js), `getWatchtowerLinks`/`getWatchtowerContent` (watchtower-tools.js), `downloadRtfContent`, `fetchPublicationData`, `getCurrentIssue` and `getCurrentWatchtowerIssue` (rtf-utils.js), `WOLScraper`/`scraper` (wol-scraper.js) and `fetchWithTimeout` (fetch-with-timeout.js). Call the tools instead.
 
 All tool names and earlier parameter names still work (see the `verse` type note above).
 
@@ -283,7 +296,7 @@ All tool names and earlier parameter names still work (see the `verse` type note
 | `JW_MCP_FETCH_TIMEOUT_MS` | `20000` | Time limit for each request to JW.org, including reading the response (max 600000; a larger value is capped with a warning). Tools that make several requests also have an overall budget per call: twice this value (at least 50 s for the workbook and Watchtower tools). |
 | `MCP_TRANSPORT` | `stdio` | `http` for the Docker/remote mode described above. |
 
-Results from JW.org are cached in memory: Bible data for 6 hours, workbook and Watchtower listings and files for 1 hour, and the language list for a day.
+Results from JW.org are cached in memory: Bible data for 6 hours, workbook and Watchtower listings and files for 1 hour, video lookups and captions for 30 minutes, and the language list for a day.
 
 ## Troubleshooting
 
@@ -304,7 +317,7 @@ npm run test:live      # live tests against JW.org (sets JW_MCP_LIVE=1)
 
 The offline tests never touch the network: they stub `fetch` and use small synthetic fixtures. The live tests under `tests/live/` skip unless `JW_MCP_LIVE=1`.
 
-Built with Node.js, MCP SDK, node-fetch, and cheerio.
+Built with Node.js, the MCP SDK, and cheerio.
 
 ## License
 
