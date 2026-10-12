@@ -953,14 +953,14 @@ describe('getWorkbookContent / getWatchtowerContent (url)', () => {
     assert.match(json.note, /pubName, language and link are left out: the issue 20260900 listing could not be loaded/);
   });
 
-  it('refuses a WOL or finder link without fetching', async () => {
+  it('points a WOL or finder link at read_wol_document, without fetching', async () => {
     useFetch(() => {
       throw new Error('must not fetch');
     });
     for (const url of ['https://wol.jw.org/en/wol/d/r1/lp-e/2026521', 'https://www.jw.org/finder?wtlocale=E&docid=904']) {
       const { result, text } = await watchtower('getWatchtowerContent', { url });
       assert.equal(result.isError, true);
-      assert.match(text, /Next step: Leave url out and pass date/);
+      assert.match(text, /Next step: Leave url out[\s\S]*call read_wol_document with this link/);
     }
     assert.equal(calls.length, 0);
   });

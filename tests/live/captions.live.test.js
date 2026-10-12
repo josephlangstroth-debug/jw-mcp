@@ -179,7 +179,7 @@ describe('get_jw_captions round 4 (live)', { skip }, () => {
   it('points a song video at its lyrics page', async () => {
     const { meta } = ok(await call({ video_id: 'pub-sjjm_129_VIDEO' }));
     assert.equal(meta.captions_available, false);
-    assert.match(meta.next_step, /docid=1102016929/);
+    assert.match(meta.next_step, /read_wol_document docid "1102016929"/);
     assert.doesNotMatch(meta.next_step, /another language/);
   });
 

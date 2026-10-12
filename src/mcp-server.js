@@ -7,6 +7,7 @@ import {
 import { captionsTool, handleCaptionsTool } from './tools/captions-tool.js';
 import { workbookTools, handleWorkbookTools } from './tools/workbook-tools.js';
 import { watchtowerTools, handleWatchtowerTools } from './tools/watchtower-tools.js';
+import { wolTools, handleWolTools } from './tools/wol-tools.js';
 import {
   searchBibleBooksTool,
   getBibleVerseTool,
@@ -19,6 +20,17 @@ import { errorResult, errorToResult } from './tools/results.js';
 
 const { version: SERVER_VERSION } = createRequire(import.meta.url)('../package.json');
 
+export const SERVER_INSTRUCTIONS = `JW.org content: the Bible (New World Translation), the meeting workbook, Watchtower study articles, the daily text, the Watchtower Online Library (WOL) and video transcripts.
+Which tool:
+- Verse text: get_bible_verse with reference ("John 3:16", "Ps. 83:18-20"; several separated by ";", such as a verse's cross references). Study notes, footnotes, cross references, research articles: get_verse_with_study. Links only: get_bible_verse_url. Book names and numbers: search_bible_books.
+- This week's meetings: getWorkbookContent (midweek meeting) and getWatchtowerContent (Watchtower study) return the text in one call; no arguments means this week, date (YYYY-MM-DD) picks another week. getWorkbookLinks and getWatchtowerLinks list an issue's weeks.
+- Daily text: get_daily_text.
+- Research: search_wol finds what the publications say on a topic, phrase or verse; read_wol_document opens a wol.jw.org document link a tool returns (/wol/d/, /pc/, /b/...; for get_daily_text's /wol/h/ url call get_daily_text with that date, or read its source_urls), a song video link (as the song's lyrics), or a jw.org article link (www.jw.org/<lang>/library/..., /bible-teachings/...).
+- Video transcript: get_jw_captions with a video key or jw.org link; video_id "latest broadcast" (latest:StudioMonthlyPrograms) is the newest JW Broadcasting monthly program, and "last month's broadcast" or "September 2026 broadcast" picks one by month; "latest morning worship", "latest Governing Body update" (pass these words: it reads only the updates, while latest:StudioNewsReports is the whole news category, excerpts included) and "latest talk" work the same way, and a jw.org category link gives that category's newest video by publish date. Song videos have no captions; their next_step names the lyrics page.
+langwritten selects the language on every content tool (read_wol_document re-reads docid, finder and /wol/d/ links in it; other links are read as given, with a note): a JW.org code (E English, the default; S Spanish; F French; T Portuguese; X German; J Japanese; KO Korean; CHS Chinese), an ISO tag ("es") or a name ("Spanish").
+Dates default to the server's local date; pass the user's local date (YYYY-MM-DD) when it may differ.
+Errors say what failed, and a "Next step:" line says how to fix the call.`;
+
 // Every tool only reads public JW.org content. The book and link tools answer
 // from local tables but fetch a language's book names when langwritten is set.
 const TOOL_META = {
@@ -30,6 +42,9 @@ const TOOL_META = {
   getWorkbookContent: { title: 'Read Meeting Workbook Week' },
   getWatchtowerLinks: { title: 'List Watchtower Study Articles' },
   getWatchtowerContent: { title: 'Read Watchtower Study Article' },
+  get_daily_text: { title: 'Daily Text' },
+  read_wol_document: { title: 'Read WOL Document' },
+  search_wol: { title: 'Search WOL' },
   get_jw_captions: { title: 'Video Transcript' },
 };
 
@@ -50,6 +65,7 @@ export const allTools = [
   getBibleVerseURLTool,
   ...workbookTools,
   ...watchtowerTools,
+  ...wolTools,
   captionsTool,
 ].map(withMeta);
 
@@ -57,6 +73,7 @@ const toolHandlers = [
   handleScriptureTools,
   handleWorkbookTools,
   handleWatchtowerTools,
+  handleWolTools,
   handleCaptionsTool,
 ];
 
@@ -66,6 +83,7 @@ const LANG_ALIASES = { __proto__: null, lang: 'langwritten', language: 'langwrit
 const TOOL_ALIASES = {
   __proto__: null,
   get_jw_captions: { __proto__: null, url: 'video_id', video_url: 'video_id', lank: 'video_id', link: 'video_id' },
+  read_wol_document: { __proto__: null, link: 'url' },
   getWorkbookContent: { __proto__: null, link: 'url' },
   getWatchtowerContent: { __proto__: null, link: 'url' }
 };
@@ -185,7 +203,7 @@ export async function callTool(request, { handlers = toolHandlers } = {}) {
 export function createMcpServer(requestId = 'default') {
   const server = new Server(
     { name: 'jw-mcp', version: SERVER_VERSION },
-    { capabilities: { tools: {} } }
+    { capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS }
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {

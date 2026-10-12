@@ -37,11 +37,12 @@ src/
     ├── watchtower-tools.js   # getWatchtowerLinks, getWatchtowerContent
     ├── rtf-utils.js          # Shared periodicals logic: issue/week rules, pub-media listings, file download
     ├── rtf-parser.js         # RTF to plain text
+    ├── wol-tools.js          # get_daily_text, read_wol_document, search_wol
     └── captions-tool.js      # get_jw_captions
 tests/
 ├── auth/, http-oauth.test.js # OAuth and HTTP connector
 ├── tools/                    # Offline tests, one file per area, plus integration.test.js (whole server)
-└── live/                     # Live JW.org tests, skipped unless JW_MCP_LIVE=1
+└── live/                     # Live JW.org tests, skipped unless JW_MCP_LIVE=1; e2e.live.test.js spawns the server
 ```
 
 ## Tool Structure Pattern
@@ -109,9 +110,9 @@ Rules:
 ## Adding New Tools
 
 1. Add the definition, implementation and handler case in a file under `src/tools/`.
-2. Register in `src/mcp-server.js`: add the definition to `allTools`, the handler to `toolHandlers`, and a `TOOL_META` entry with a human `title`. Startup fails if a tool has no `TOOL_META` entry. Both stdio and http modes share this file.
+2. Register in `src/mcp-server.js`: add the definition to `allTools`, the handler to `toolHandlers`, and a `TOOL_META` entry with a human `title`. Startup fails if a tool has no `TOOL_META` entry. Both stdio and http modes share this file. If the tool changes which tool an AI should pick, update `SERVER_INSTRUCTIONS` there too.
 3. Add the tool to `manifest.json` `tools` and to README.md.
-4. Add offline tests in `tests/tools/<area>.test.js` and a live test in `tests/live/<area>.live.test.js`. Add the tool's bad-input and realistic cases to `tests/tools/integration.test.js`. The integration test checks titles, annotations, schemas, the `tools/list` size budget (14,500 characters) and that the manifest matches.
+4. Add offline tests in `tests/tools/<area>.test.js` and a live test in `tests/live/<area>.live.test.js`. Add the tool's bad-input and realistic cases to `tests/tools/integration.test.js` and a call to `tests/live/e2e.live.test.js`. The integration test checks titles, annotations, schemas, the `tools/list` size budget (14,500 characters) and that the manifest matches.
 
 ## Running the Server
 
@@ -137,13 +138,13 @@ Requires `.env` with `MCP_BASE_URL` and `MCP_AUTH_SECRET` (at least 16 character
 
 ```bash
 npm test               # offline: auth, http-oauth, tests/tools/*.test.js
-npm run test:live      # JW_MCP_LIVE=1, tests/live/*.test.js
-npm run test:coverage  # auth and HTTP tests with c8 thresholds
+npm run test:live      # JW_MCP_LIVE=1, tests/live/*.test.js (about 140 JW.org requests)
+npm run test:coverage  # offline tests with c8 thresholds (auth, server and tools)
 ```
 
 - Offline tests must not touch the network. Replace `globalThis.fetch` in `beforeEach` with a guard that throws, and stub it per test (see `tests/tools/foundation.test.js`).
 - Use small synthetic fixtures that mimic JW.org markup, JSON or RTF structure. Do not commit copies of JW.org articles, RTF files, Bible chapter pages or caption files; one sentence is the most to embed.
-- Live tests skip unless `JW_MCP_LIVE=1`. Be polite to JW.org: run a single live file while iterating (`JW_MCP_LIVE=1 node --test tests/live/periodicals.live.test.js`).
+- Live tests skip unless `JW_MCP_LIVE=1`. Be polite to JW.org: run a single live file while iterating (`JW_MCP_LIVE=1 node --test tests/live/wol.live.test.js`).
 
 ## Key Technical Details
 
@@ -154,6 +155,7 @@ npm run test:coverage  # auth and HTTP tests with c8 thresholds
 ### MCP Server (`src/mcp-server.js`)
 
 - `allTools` adds a `title` and `annotations` (`readOnlyHint: true`, `idempotentHint: true`, `openWorldHint: true`) to every tool definition. Even the book and link tools fetch a language's book names when `langwritten` is set.
+- `SERVER_INSTRUCTIONS` is sent at initialize and tells the AI which tool to use for what, and that `langwritten` selects the language.
 - `callTool()` handles every `tools/call`: it checks `arguments ?? {}` against the tool's schema (`normalizeArgs`): `lang`/`language` become `langwritten` on tools that have it, `TOOL_ALIASES` maps per-tool names (`link` -> `url`, captions' `url`/`lank` -> `video_id`), `HIDDEN_PARAMS` lists accepted keys left out of the schema (1.3.3's `pub`, `max_chars`), a key within edit distance 1 (names of 4 characters or fewer) or 2 of a parameter, or a lang/locale-like key on a tool with `langwritten`, is an `isError` result naming the likely parameter, and any other key is dropped and listed in a trailing "Ignored argument ..." text block (1.3.3 ignored them; `content[0]` stays the tool's JSON). Then it passes the arguments to the handlers, turns a thrown error into an `isError` result (`errorToResult`) and answers an unknown tool name with an `isError` result listing the real tools. It never throws to the SDK.
 
 ### OAuth Authentication (`src/auth.js`)
@@ -198,6 +200,11 @@ When `MCP_AUTH` is not `false` and `MCP_AUTH_SECRET` is set:
 ### RTF Parsing
 `rtf-parser.js` keeps the published text verbatim: one line per paragraph, a blank line before headings, `\line` as a space, bullets as `•`, table cells joined with ` | `. Its output matches LibreOffice's text export word for word. Parsed text is about 22-27% of the RTF size. Do not post-process it with heuristics. `parseRTFDocument()` also returns the title, headings and links.
 
+### WOL Tools (`wol-tools.js`)
+- `get_daily_text` reads `/wol/h/<r>/<lp>/YYYY/M/D` (one page holds three days). WOL has recent years only. Memorial-season headings are `<br>`-separated lines (joined with ` · `), and `.closingContent` holds that day's Memorial Bible reading (`memorial_reading`, else null).
+- `read_wol_document` follows `/wol/pc/`, `/tc/` and `/bc/` citation links (they redirect to `/wol/d/...#h=` or `/wol/b/...#v=`; a citation of several ranges answers 200 with a list of excerpt cards, whose `/wol/d/` links are read instead), opens jw.org `finder?docid=` links as `/wol/d/<docid>` in the `wtlocale` language, opens a www.jw.org article page through the docid in its `<body>` (`mid<docid>` / `docId-<docid>`, language `ml-<code>`; one cached request; never the first `docid=` on the page), pages long text with `offset`/`next_offset` (`max_chars` at most 80000, and a page at most `PAGE_TOKENS`), marks cited paragraphs with `▶` (`cited.paragraphs` are their printed numbers), and `cited_only` returns the cited paragraphs. `citedParts` gives `{i, start, end}` per block: `#h=` cites whole blocks, `#v=` only its verses (a Bible `<p>` holds several; blocks carry `starts`). `citedText` adds the footnotes the cited parts mark (blocks carry `notes: [{id, at}]`, footnote blocks `fnid`). Bible chapter pages keep their footnotes outside `#article` (`li[data-extract-id=verseFootnote-<id>]`); they are appended as `[*n] <verse>: <text>`. Picture captions are marked `🖼 ` (language-neutral, like `▶`). A song video link (`lank=pub-sjjm_<n>_VIDEO`) opens the song's lyrics docid. `get_daily_text` with `sources: true` reads the cited paragraphs of each source link. Each WOL tool call has one budget (`CALL_BUDGET_MS`, 2x the request timeout), language lookups included.
+- `search_wol` uses WOL's search page (40 results per page, total in `#searchResultsTotal`). Page 1 also has a glossary card (`ul.resultContentTopic`) whatever the filter; it is returned as `glossary` and never counted as a result. `wolQueryText` removes punctuation WOL would treat as part of a word (`—`, word-final `, . ; : ? !`) and the result says so (`searched`, `note`).
+
 ### Captions (`captions-tool.js`)
 Mediator `media-items/<code>/<key>?clientType=www`, then the WebVTT file on `*.jw-cdn.org`. A docid or page link may need the finder or the page HTML first; a category link or `latest:<Category>` reads `categories/<code>/<Category>?clientType=www`: `LatestVideos` and `StudioMonthlyPrograms` list newest first (`limit=6`, more for `~N`), other categories are in jw.org's curated order, so they are read whole (`limit=100`, up to 5 pages) and sorted by `firstPublished`. The note lists the five videos before the one returned; `latest:<Category>~N` and "previous ..." read further back, and "August 2026 broadcast" pages `StudioMonthlyPrograms` by `firstPublished`. A group of categories (`type: container`) lists its categories only with `detailed=1`. Free text such as "latest morning worship" maps to a key through `CATEGORY_ALIASES`; a camel-case key is used as given. "last/this month's broadcast" and a month without a year ("September broadcast") are dated by `parseVideoReference(input, { now })` (default: the server's local date); other categories are not found by date. Category listings are cached as slim items (`slimItem`: key, title, string firstPublished, trimmed media), and every `~N` within the same pages shares one listing. "Governing Body update" is a `SERIES` within `StudioNewsReports`: only the items whose English title is "<year> Governing Body Update #n" count (excerpts and news reports share the category), matched across languages by `languageAgnosticNaturalKey`. One 40 s deadline covers the call. The result is a JSON metadata block plus the transcript as a second text block; a video with no caption file returns metadata with `captions_available: false` (not an error); for a song video (`songbook.js`) its `next_step` names the lyrics page. Parts default to 60,000 characters (a monthly program), at most 80,000 (50,000 for vtt) and `PAGE_TOKENS`, and a longer transcript is split into equal parts. Wrapped lines inside a cue join tight in CJK; English captions (`closedDashes`, keyed on the captions' language) join at a closed em dash; cue breaks stay a space unless the cue ends in CJK punctuation (JW's Japanese captions have no `。`). Identical cues are merged only when they overlap in time (repeated lyrics and replies stay), and the text formats drop the opening quotation marks English captions repeat at the start of every cue of an open quotation (`dropContinuationMarks`).
 
@@ -234,4 +241,4 @@ Docker image published to `ghcr.io/advenimus/jw-mcp` on each release. Environmen
 
 ## Language Support
 
-Every content tool takes `langwritten` (default `E`): a JW.org code (`E` English, `S` Spanish, `F` French, `T` Portuguese, `X` German, `J` Japanese, `KO` Korean, `CHS` Chinese Simplified, ...), an ISO tag (`es`) or a language name (`Spanish`). `search_bible_books` takes it only to match that language's book names. `get_jw_captions` defaults to the language in the link. Not every publication exists in every language; the tools say so in an `isError` result.
+Every content tool takes `langwritten` (default `E`): a JW.org code (`E` English, `S` Spanish, `F` French, `T` Portuguese, `X` German, `J` Japanese, `KO` Korean, `CHS` Chinese Simplified, ...), an ISO tag (`es`) or a language name (`Spanish`). `search_bible_books` takes it only to match that language's book names. `read_wol_document` reads `docid`, finder links, jw.org article links and `/wol/d/` links in it; other WOL links are read as given, with a note. `get_jw_captions` defaults to the language in the link. Not every publication exists in every language; the tools say so in an `isError` result.

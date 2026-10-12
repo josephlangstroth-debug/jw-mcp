@@ -907,13 +907,12 @@ function toFormat(value) {
 // The song comes from the title ("103. Shepherds—Gifts in Men"), else the key.
 function songLyricsStep(media, lang) {
   const [, number, name = media.title ?? ''] = /^(\d+)\.\s*(.*)$/.exec(media.title ?? '') ?? [];
+  // WOL search misses titles with dashes or quote marks, and the audio-described version adds "(...)".
+  const words = name.replace(/\s*\([^)]*\)\s*$/, '').replace(/[^\p{L}\p{N}'’]+/gu, ' ').trim();
   const docid = songbookDocid(number ? Number(number) : songOfKey(media.key));
-  // The audio-described version adds "(...)" to the title.
-  const song = name.replace(/\s*\([^)]*\)\s*$/, '').trim();
-  const where = docid
-    ? `the song's page in the songbook: https://www.jw.org/finder?wtlocale=${encodeURIComponent(lang.code)}&docid=${docid}`
-    : `the songbook Sing Out Joyfully to Jehovah${song ? ` ("${song}")` : ''}`;
-  return `Song videos show the words on screen and have no caption file in any language. For the lyrics, see ${where}.`;
+  const read = docid ? `read_wol_document docid "${docid}" langwritten "${lang.code}"` : '';
+  const search = words ? `search_wol query "${words}" publications ["songbooks"] langwritten "${lang.code}"` : '';
+  return `Song videos show the words on screen and have no caption file in any language. For the lyrics: ${[read, search].filter(Boolean).join(', or ') || `search_wol with publications ["songbooks"]`}.`;
 }
 
 function notFound(ref, requested, ctx) {

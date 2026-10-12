@@ -786,7 +786,7 @@ const FIELDS_HINT = 'Field names use underscores, e.g. ["cross_references", "stu
 
 export const getVerseWithStudyTool = {
   name: 'get_verse_with_study',
-  description: 'NWT Study Edition verses with study material: one chapter, or up to 60 verses in 5 chapters (200 if text-only); a ";" list gives passages[]. fields: verses, combined_text, study_notes {verse: [{term, note}]} (English: Matthew to James), footnotes {verse: [{phrase, note}]}, cross_references (one per marker: {verse, phrase, targets}), study_articles (Research Guide [{title, source, url}]), chapter_level (outline), chapter_articles (the whole chapter\'s, in chapter_level).',
+  description: 'NWT Study Edition verses with study material: one chapter, or up to 60 verses in 5 chapters (200 if text-only); a ";" list gives passages[]. fields: verses, combined_text, study_notes {verse: [{term, note}]} (English: Matthew to James), footnotes {verse: [{phrase, note}]}, cross_references (one per marker: {verse, phrase, targets}), study_articles (Research Guide [{title, source, url}] for read_wol_document), chapter_level (outline), chapter_articles (the whole chapter\'s, in chapter_level).',
   inputSchema: {
     type: 'object',
     properties: {

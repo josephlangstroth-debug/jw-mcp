@@ -3,7 +3,7 @@
 [![npm version](https://img.shields.io/npm/v/jw-mcp)](https://www.npmjs.com/package/jw-mcp)
 [![GitHub Release](https://img.shields.io/github/v/release/advenimus/jw-mcp)](https://github.com/advenimus/jw-mcp/releases)
 
-An MCP server for working with JW.org content — Bible scripture lookup with study notes, workbook materials, Watchtower articles, and video captions.
+An MCP server for working with JW.org content: Bible verses with study notes, this week's meeting workbook and Watchtower study, the daily text, Watchtower Online Library search and reading, and video transcripts. Every content tool takes a `langwritten` language.
 
 ## Quick Start
 
@@ -112,6 +112,21 @@ Cloudflare settings that can block AI connectors. Check them for this hostname:
 
 ## Tools
 
+| Need | Tool |
+|---|---|
+| Verse text | `get_bible_verse` |
+| Study notes, footnotes, cross references, research articles | `get_verse_with_study` |
+| Clickable jw.org links for references | `get_bible_verse_url` |
+| Book names, numbers and abbreviations | `search_bible_books` |
+| This week's midweek meeting | `getWorkbookContent` (`getWorkbookLinks` lists an issue's weeks) |
+| This week's Watchtower study | `getWatchtowerContent` (`getWatchtowerLinks` lists an issue's articles) |
+| Daily text | `get_daily_text` |
+| Find what the publications say on a topic, phrase or verse | `search_wol` |
+| Open a wol.jw.org document link a tool returned (not the daily text page; use `get_daily_text`), or a jw.org article link | `read_wol_document` |
+| Video transcript | `get_jw_captions` |
+
+All tools are read-only. The server sends MCP instructions that tell the AI which tool to use, and each tool has a title and annotations (`readOnlyHint`, `idempotentHint`, `openWorldHint`) so clients can auto-approve them.
+
 ### Languages
 
 Every content tool takes `langwritten` (default `E`, English). It accepts:
@@ -126,7 +141,7 @@ An all-caps value that is both a built-in language's ISO tag and another languag
 
 ### Dates
 
-The workbook and Watchtower tools accept `date` as `YYYY-MM-DD` and default to today on the server, in its local time zone. A server running in UTC (Docker) can be a day off from the user, so pass the user's local date when it matters.
+Tools that depend on the day (`get_daily_text`, the workbook and Watchtower tools) accept `date` as `YYYY-MM-DD` and default to today on the server, in its local time zone. A server running in UTC (Docker) can be a day off from the user, so the AI is told to pass the user's local date.
 
 ### Errors
 
@@ -177,7 +192,7 @@ Verses with study material from the NWT Study Edition: any one chapter, or up to
 | `footnotes` (default) | `{verse: [{phrase, note}]}`; `phrase` is the words the marker follows |
 | `combined_text` | the passage as one numbered string (the same text as `verses`) |
 | `cross_references` | one entry per `+` marker, in the order the markers appear in the verse, as WOL shows them: `[{chapter, verse, phrase, targets}]`, where `phrase` is the words the marker follows (`"the only true God"`); a verse can have several. `cross_references_count` counts the references. |
-| `study_articles` | Research Guide entries `[{title, source, publication, url}]`, capped by `limit` (default 5; `0` or less, or anything above 100, means 100; a decimal is rounded down; `study_articles_total` gives the full count and `note` says how to get the rest). Outside English the Research Guide is a citation index, so `title` is the citation (`"Perspicacia, págs. 437"`). |
+| `study_articles` | Research Guide entries `[{title, source, publication, url}]`, capped by `limit` (default 5; `0` or less, or anything above 100, means 100; a decimal is rounded down; `study_articles_total` gives the full count and `note` says how to get the rest). Outside English the Research Guide is a citation index, so `title` is the citation (`"Perspicacia, págs. 437"`). Open a `url` with `read_wol_document`. |
 | `chapter_level` | the chapter outline |
 | `chapter_articles` | Research Guide entries for the whole chapter `[{title, source, publication, url, verses}]`, capped by `limit`, returned in `chapter_level.study_articles` with `study_articles_total` (or `chapter_level.study_articles_same_as: "study_articles"` when the passage is the whole chapter and `study_articles` is also requested) |
 
@@ -221,7 +236,7 @@ One call gets the text. With no arguments, `getWorkbookContent` returns this wee
 { "issue": "20260900", "week": 2 }
 ```
 
-They return `{title, week_start, week_end, issue, pubName, language, langwritten, fileformat, url, link, parsedText}`. `url` is the source file and `link` the jw.org page to show or cite. For the workbook, `parsedText` is the meeting outline (songs, parts, minutes) followed by the scriptures and reference material JW.org inserts after each part. For the Watchtower, it is the article with its paragraphs, questions and review box. You can also pass `url`: the file `url` (an RTF or TXT link, not the jw.org `link`) of any entry from the Links tools. A `url` call returns the same fields: `title`, `week_start`/`week_end` when the title names a week, and `pubName`, `language` and `link` from the issue's listing (one cached request; when the listing cannot be loaded they are left out with a `note`). `links` lists the songs and publications the week links to; each song video link is followed by the song's lyrics page (`"Song 103 lyrics"`, a `finder?docid=` link), since song videos have no captions. For a week the issue skips, such as Memorial week in the workbook, the error says there is no meeting that week and gives the `url` of what the issue files there (the Memorial Bible Reading Schedule).
+They return `{title, week_start, week_end, issue, pubName, language, langwritten, fileformat, url, link, parsedText}`. `url` is the source file and `link` the jw.org page to show or cite. For the workbook, `parsedText` is the meeting outline (songs, parts, minutes) followed by the scriptures and reference material JW.org inserts after each part. For the Watchtower, it is the article with its paragraphs, questions and review box. You can also pass `url`: the file `url` (an RTF or TXT link, not the jw.org `link`) of any entry from the Links tools. A `url` call returns the same fields: `title`, `week_start`/`week_end` when the title names a week, and `pubName`, `language` and `link` from the issue's listing (one cached request; when the listing cannot be loaded they are left out with a `note`). `links` lists the songs and publications the week links to; each song video link is followed by the song's lyrics page (`"Song 103 lyrics"`, a `finder?docid=` link `read_wol_document` opens), since song videos have no captions. For a week the issue skips, such as Memorial week in the workbook, the error says there is no meeting that week and gives the `url` of what the issue files there (the Memorial Bible Reading Schedule).
 
 `week` is the week number within the issue (from the Links tools), not the week of the month. `date` and `week` are alternatives: with both, `week` must be the week that holds `date`, or the call is an error naming the right week.
 
@@ -233,7 +248,7 @@ How issues map to weeks: a week belongs to the month of its Monday. Workbook iss
 
 #### `getWorkbookLinks` / `getWatchtowerLinks`
 
-List the weeks (workbook) or articles (Watchtower) of one issue, by default the issue that holds the current week. Each entry has `title`, `type` (`week`, `study` or `other`; absent for whole-issue formats such as PDF, EPUB and JWPUB), `week`, `week_start`, `week_end`, `is_current_week`, the file `url` and, when available, a jw.org `link`. `current_week` is the entry for this week (or for `date`); pass its `week` to the Content tools.
+List the weeks (workbook) or articles (Watchtower) of one issue, by default the issue that holds the current week. Each entry has `title`, `type` (`week`, `study` or `other`; absent for whole-issue formats such as PDF, EPUB and JWPUB), `week`, `week_start`, `week_end`, `is_current_week`, the file `url` and, when available, a jw.org `link` (`read_wol_document` opens it). `current_week` is the entry for this week (or for `date`); pass its `week` to the Content tools.
 
 ```json
 { "issue": "20260900", "langwritten": "E" }
@@ -243,6 +258,40 @@ List the weeks (workbook) or articles (Watchtower) of one issue, by default the 
 `fileformat` is `RTF` by default (TXT for languages that have no RTF). `PDF`, `EPUB`, `JWPUB`, `MP3`, `MP4`, `3GP`, `BRL` and `DAISY` return download links only; the Content tools read RTF and TXT. Sign-language editions (`ASL`, `BSL` ...) have no RTF or TXT: ask for `MP4` or `3GP`. Their entries carry `resolution` (`240p`, `720p`), and the files of one week share its `week` number. A listing returns at most 200 entries (`total_entries` gives the full count).
 
 ![Watchtower Content Example](assets/images/get-wt-info.png)
+
+---
+
+### Watchtower Online Library
+
+#### `get_daily_text`
+
+The daily text (*Examining the Scriptures Daily*) for today or `date`: `{date, heading, theme_scripture, text, citation, source_url, source_urls, publication, memorial_reading, url}`. In the days before the Memorial, `memorial_reading` holds that day's Memorial Bible reading, with WOL's own label (`"Memorial Bible reading: (Daytime events: Nisan 13) Matthew 26:17-19; ..."`), and the heading keeps its lines apart (`"MEMORIAL DATE · After Sundown · Thursday, April 2"`); on other days it is `null`. WOL keeps recent years only (in English, 2022 onward). `source_urls` has every source link (a citation such as `w25.02 5 ¶17; 7 ¶18` has two) and `source_url` is the first. `sources: true` also returns `sources: [{title, citation, url, text}]`, the paragraphs the comment comes from and the footnotes they mark, in the same call (`read_wol_document` with `cited_only: true` on each source link gives the same).
+
+```json
+{ "date": "2026-10-12", "langwritten": "F" }
+```
+
+#### `search_wol`
+
+The same search as the WOL website. Returns `{query, total, page, results: [{title, citation, url, occurrences, snippet}], next_page?}`. On page 1, the glossary card WOL shows above the results (whatever the `publications` filter) comes back on its own as `glossary: {title, url, definition}`; it is not one of the results and does not count toward `limit` or paging. WOL matches words, not punctuation attached to them, so `—`, `…` and `, . ; : ? !` at the end of a word are removed before searching (a title copied from another tool, such as `"Baptism—How to Get Ready"`, finds that document); `searched` and `note` then show what was searched. An en dash between digits (`John 17:1–3`), punctuation after a number (`John 3:16, 17`), a `?` inside a word (`wom?n`) and `!` at the start of a word (NOT) are kept.
+
+```json
+{ "query": "\"kingdom of God\"", "publications": ["watchtower", "insight"], "limit": 5 }
+{ "query": "John 3:16" }
+```
+
+A search that finds nothing says which library it searched and how to search another language; a page past the last result keeps the real `total`. All words must appear within `scope` (`sentence`, `paragraph` by default, or `article`). Use `"exact phrase"`, `*` for any text, `?` for one character, `|` for OR, `!` for NOT and `( )` to group. `sort` is `occurrences` (default), `newest` or `oldest`. `publications` narrows the search to `bible`, `watchtower`, `awake`, `insight`, `index`, `glossary`, `books`, `brochures`, `booklets`, `tracts`, `workbook`, `kingdom_ministry`, `daily_text`, `yearbooks`, `songbooks`, `kingdom_news` or `web`.
+
+#### `read_wol_document`
+
+Reads a wol.jw.org link as clean text: articles, Insight, books, Research Guide pages and Bible chapters. Use it for links from `get_verse_with_study`, `search_wol`, `get_daily_text`, or links inside a document it returned. A jw.org `finder?docid=` link, as the workbook and Watchtower tools return, opens the same document in WOL (in its `wtlocale` language, or `langwritten`), and so does a jw.org article link (`www.jw.org/en/library/...`, `/bible-teachings/...`), in one call. With `langwritten`, a `/wol/d/` link is read in that language (same document, same `#h=` range); other WOL links are read as given, with a `note`. Returns `{title, publication, citation, url, text, offset, next_offset, total_chars}`. The text keeps paragraph numbers, `#` headings (also the class-styled headings of older publications), picture captions (marked `🖼`, in every language), footnotes and links to other WOL documents as markdown (`links: false` removes them). A Bible chapter's footnotes follow its text under the page's own heading, each with its verse (`[*1] Psalm 23:2: Or possibly, “to tranquil waters.”`), and the verses carry the `[*1]` markers. A song video link (`finder?lank=pub-sjjm_103_VIDEO`) opens that song's lyrics page, with a `note`.
+
+```json
+{ "url": "https://wol.jw.org/en/wol/pc/r1/lp-e/1200029049/3271/0", "cited_only": true }
+{ "docid": "2025241", "langwritten": "S" }
+```
+
+Long documents come in parts of at most `max_chars` (default 30000, at most 80000) and about 20,000 tokens, so a part of Japanese, Chinese or Korean text is about 20,000 characters: while `next_offset` is not null, call again with `offset` set to it. Citation links (`/wol/pc/`) point at specific paragraphs, and Bible links (`/wol/bc/`, or `/wol/b/...#v=43:3:16`) at specific verses; the text marks each with `▶`, `cited` gives the printed paragraph numbers, `offset` and `chars`, and `cited_only: true` returns just those paragraphs or verses (not the rest of the Bible paragraph that holds them), followed by the footnotes they mark, also for a citation of several paragraph ranges. In a finder link, a `wtlocale` that is not a JW.org language is reported as a problem with the link; pass `langwritten` or `docid` instead.
 
 ---
 
@@ -260,7 +309,7 @@ A video's transcript and metadata. `video_id` takes a media key (`pub-jwb-142_1_
 
 The result has two text blocks: a JSON metadata block (`title`, `key`, `language`, `duration`, `published`, `category`, `url`, `truncated`, `next_offset`, ...) and the transcript as paragraphs with `[m:ss]` time markers. `format` is `text` (default), `plain` (no markers) or `vtt` (the raw WebVTT file). Long programs come in parts of `max_chars` (default 60000, enough for a monthly program; at most 80000, and 50000 for `vtt`) and about 20,000 tokens, so Japanese and Chinese transcripts come in shorter parts: when `truncated` is true, call again with `offset` = `next_offset`. A longer transcript is split into parts of about equal size. In Japanese and Chinese transcripts a caption break without punctuation is kept as a space, since JW's captions often have no `。`. A line said or sung again keeps every repeat, and the opening quotation marks English captions repeat at the start of each caption show once (`format: "vtt"` stays as JW.org wrote it).
 
-`langwritten` defaults to the language in the link, else English. If the video has no captions in that language, English captions are returned with a note: the title and link stay those of the requested language's video, and `captions_language` is `"E"`. A video with no caption file at all (for example, subtitles burned into the picture) returns its metadata with `captions_available: false`, the reason and a `next_step`. Song videos (`pub-sjjm_..._VIDEO`) show the words on screen and have no caption file in any language, so their `next_step` gives the song's lyrics page in the songbook. English transcripts close an em dash that a caption break split (`facing—anxious times`); Spanish and French keep their spaced dashes.
+`langwritten` defaults to the language in the link, else English. If the video has no captions in that language, English captions are returned with a note: the title and link stay those of the requested language's video, and `captions_language` is `"E"`. A video with no caption file at all (for example, subtitles burned into the picture) returns its metadata with `captions_available: false`, the reason and a `next_step`. Song videos (`pub-sjjm_..._VIDEO`) show the words on screen and have no caption file in any language, so their `next_step` names the song's lyrics page (`read_wol_document` with its docid) and a `search_wol` songbook search. English transcripts close an em dash that a caption break split (`facing—anxious times`); Spanish and French keep their spaced dashes.
 
 ![Video Captions Example](assets/images/get-video-captions.png)
 
@@ -285,6 +334,7 @@ The result has two text blocks: a JSON metadata block (`title`, `key`, `language
 - `langwritten` also accepts ISO tags and names, and a two-letter all-caps value that is both a built-in ISO tag and another language's JW.org code is read as the ISO tag: `TL` is Tagalog (was Tamil), `RU` Russian (was Kirundi), and likewise `EN`, `FR`, `IT`, `JA`, `UK`, `VI`, `ID`, `AR`. The result's `note` says so; pass the language name (`Tamil`) or ISO tag (`ta`) for the other language.
 - Argument names are checked: `lang` and `language` mean `langwritten` on every tool, and `link` means `url`. An argument that looks like a misspelt parameter (`referense`, `langauge`, `field` for `fields`) or a language under another name (`locale`, `wtlocale`) is an error that names the parameter you probably meant. Any other unknown argument is ignored, as in 1.3.3, and the result ends with a note naming it.
 - `footnotes` (new) are `[{phrase, note}]` objects, and verse `text` keeps poetic line breaks (`\n`).
+- New tools: `get_daily_text`, `search_wol`, `read_wol_document`.
 - jw-mcp is an MCP server, not a library. Deep imports of the old internal helpers break: `getWorkbookLinks`/`getWorkbookContent` (workbook-tools.js), `getWatchtowerLinks`/`getWatchtowerContent` (watchtower-tools.js), `downloadRtfContent`, `fetchPublicationData`, `getCurrentIssue` and `getCurrentWatchtowerIssue` (rtf-utils.js), `WOLScraper`/`scraper` (wol-scraper.js) and `fetchWithTimeout` (fetch-with-timeout.js). Call the tools instead.
 
 All tool names and earlier parameter names still work (see the `verse` type note above).
@@ -296,7 +346,7 @@ All tool names and earlier parameter names still work (see the `verse` type note
 | `JW_MCP_FETCH_TIMEOUT_MS` | `20000` | Time limit for each request to JW.org, including reading the response (max 600000; a larger value is capped with a warning). Tools that make several requests also have an overall budget per call: twice this value (at least 50 s for the workbook and Watchtower tools). |
 | `MCP_TRANSPORT` | `stdio` | `http` for the Docker/remote mode described above. |
 
-Results from JW.org are cached in memory: Bible data for 6 hours, workbook and Watchtower listings and files for 1 hour, video lookups and captions for 30 minutes, and the language list for a day.
+Results from JW.org are cached in memory: Bible data and WOL documents for 6 hours, daily texts for 12 hours, workbook and Watchtower listings and files for 1 hour, WOL searches for 1 hour, video lookups and captions for 30 minutes, and the language list for a day.
 
 ## Troubleshooting
 
@@ -311,11 +361,12 @@ Results from JW.org are cached in memory: Bible data for 6 hours, workbook and W
 ```bash
 npm start              # stdio mode (local)
 npm run start:http     # HTTP mode (testing)
-npm test               # offline tests: OAuth, HTTP connector, tools, the assembled server
+npm test               # offline tests: OAuth, HTTP connector, every tool, the assembled server
 npm run test:live      # live tests against JW.org (sets JW_MCP_LIVE=1)
+npm run test:coverage  # offline tests with coverage thresholds
 ```
 
-The offline tests never touch the network: they stub `fetch` and use small synthetic fixtures. The live tests under `tests/live/` skip unless `JW_MCP_LIVE=1`.
+The offline tests never touch the network: they stub `fetch` and use small synthetic fixtures. The live tests under `tests/live/` skip unless `JW_MCP_LIVE=1`. `tests/live/e2e.live.test.js` starts `node src/index.js` over stdio with the MCP SDK client and calls every tool once (about 15 requests). The whole live suite makes about 100 requests to JW.org, so run it sparingly.
 
 Built with Node.js, the MCP SDK, and cheerio.
 

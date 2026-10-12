@@ -1134,9 +1134,11 @@ describe('get_jw_captions: relative months, songs and odd listings', () => {
     const en = parts(await call({ video_id: 'https://www.jw.org/finder?wtlocale=E&lank=pub-sjjm_603_VIDEO' })).meta;
     assert.equal(en.captions_available, false);
     assert.doesNotMatch(en.next_step, /another language/);
-    assert.match(en.next_step, /lyrics, see the song's page in the songbook: https:\/\/www\.jw\.org\/finder\?wtlocale=E&docid=1102016903\.$/);
+    assert.match(en.next_step, /read_wol_document docid "1102016903" langwritten "E"/);
+    assert.match(en.next_step, /search_wol query "Shepherds Gifts in Men" publications \["songbooks"\]/);
     const es = parts(await call({ video_id: 'pub-sjjm_652_VIDEO', langwritten: 'S' })).meta;
-    assert.match(es.next_step, /wtlocale=S&docid=1102022952/);
+    assert.match(es.next_step, /docid "1102022952" langwritten "S"/);
+    assert.match(es.next_step, /query "Un lugar que te honrará"/);
   });
 
   it('maps song numbers to WOL docids', async () => {

@@ -1,7 +1,6 @@
 // Offline tests for the assembled server: tools/list as a client sees it, and
 // every tool's failure path through tools/call. globalThis.fetch is replaced
-// in every test, so nothing here can reach JW.org. The per-tool checks cover
-// the tools already on the shared helpers (those in REALISTIC).
+// in every test, so nothing here can reach JW.org.
 
 import { describe, it, before, after, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
-import { allTools as everyTool, callTool, createMcpServer } from '../../src/mcp-server.js';
+import { SERVER_INSTRUCTIONS, allTools, callTool, createMcpServer } from '../../src/mcp-server.js';
 import { ArgError } from '../../src/tools/args.js';
 
 const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8'));
@@ -30,6 +29,9 @@ const REALISTIC = {
   getWorkbookContent: {},
   getWatchtowerLinks: {},
   getWatchtowerContent: {},
+  get_daily_text: {},
+  read_wol_document: { url: 'https://wol.jw.org/en/wol/d/r1/lp-e/2025241' },
+  search_wol: { query: 'kingdom' },
   get_jw_captions: { video_id: 'pub-jwb-142_1_VIDEO' }
 };
 
@@ -72,15 +74,25 @@ const GARBAGE = {
     [{ week: 'two' }, /"week"/],
     [{ url: 'file:///etc/passwd' }, /"url"/]
   ],
+  get_daily_text: [
+    [{ date: '2026-02-30' }, /"date"/],
+    [{ langwritten: 42 }, /"langwritten"/]
+  ],
+  read_wol_document: [
+    [{ url: 'https://example.com/' }, /"url"/],
+    [{ url: 'https://wol.jw.org/en/wol/d/r1/lp-e/1', max_chars: 5 }, /"max_chars"/]
+  ],
+  search_wol: [
+    [{ query: 'x'.repeat(300) }, /"query"/],
+    [{ query: 'love', publications: ['comics'] }, /"publications"/],
+    [{ query: 'love', page: 0 }, /"page"/]
+  ],
   get_jw_captions: [
     [{ video_id: 'pub-x_1_VIDEO', format: 'mp4' }, /"format"/],
     [{ video_id: 'not a video at all' }, /Could not find a JW.org video/],
     [{ video_id: {} }, /"video_id"/]
   ]
 };
-
-// Tools with per-tool checks below.
-const allTools = everyTool.filter((t) => t.name in REALISTIC);
 
 const realFetch = globalThis.fetch;
 const realConsoleError = console.error;
@@ -130,28 +142,36 @@ afterEach(() => {
 });
 
 describe('server metadata', () => {
-  it('reports the package version', async () => {
+  it('reports the package version and instructions that name every tool', async () => {
     assert.deepEqual(client.getServerVersion(), { name: 'jw-mcp', version: pkg.version });
     assert.equal(manifest.version, pkg.version, 'manifest.json and package.json versions match');
+    const instructions = client.getInstructions();
+    assert.equal(instructions, SERVER_INSTRUCTIONS);
+    assert.match(instructions, /langwritten/);
+    for (const tool of allTools) assert.match(instructions, new RegExp(`\\b${tool.name}\\b`), tool.name);
+    // latest:StudioNewsReports is the whole news category, not the Governing Body updates.
+    assert.doesNotMatch(instructions, /"latest Governing Body update" \(latest:StudioNewsReports\)/);
+    // read_wol_document does not read daily text pages.
+    assert.doesNotMatch(instructions, /any wol\.jw\.org link/);
+    assert.match(instructions, /\/wol\/h\/[^.]*get_daily_text/);
   });
 });
 
 describe('tools/list', () => {
-  let listed;
   let tools;
   before(async () => {
-    ({ tools: listed } = await client.listTools());
-    tools = listed.filter((t) => t.name in REALISTIC);
+    ({ tools } = await client.listTools());
   });
 
-  it('lists the same tools as manifest.json, each once', () => {
-    const names = listed.map((t) => t.name);
+  it('lists the same 12 tools as manifest.json, each once', () => {
+    const names = tools.map((t) => t.name);
     assert.equal(new Set(names).size, names.length);
     assert.deepEqual([...names].sort(), manifest.tools.map((t) => t.name).sort());
+    assert.equal(names.length, 12);
   });
 
   it('gives every tool a title, a description and read-only annotations', () => {
-    for (const tool of listed) {
+    for (const tool of tools) {
       assert.equal(typeof tool.title, 'string', tool.name);
       assert.ok(tool.title.length >= 5 && tool.title.length <= 40, `${tool.name} title`);
       assert.ok(tool.description.length >= 80 && tool.description.length <= 600, `${tool.name} description length`);
@@ -215,15 +235,19 @@ describe('tools/list', () => {
     const byName = Object.fromEntries(tools.map((t) => [t.name, t.description]));
     assert.match(byName.get_bible_verse, /get_verse_with_study/);
     assert.match(byName.get_bible_verse, /get_bible_verse_url/);
+    assert.match(byName.get_verse_with_study, /read_wol_document/);
     assert.match(byName.getWorkbookLinks, /getWorkbookContent/);
     assert.match(byName.getWorkbookContent, /getWorkbookLinks/);
     assert.match(byName.getWatchtowerLinks, /getWatchtowerContent/);
     assert.match(byName.getWatchtowerContent, /getWatchtowerLinks/);
+    assert.match(byName.get_daily_text, /read_wol_document/);
+    assert.match(byName.search_wol, /read_wol_document/);
     assert.match(byName.get_jw_captions, /next_offset/);
+    assert.match(byName.read_wol_document, /next_offset/);
   });
 
   it(`stays under ${MAX_TOOLS_LIST_CHARS} characters`, () => {
-    const size = JSON.stringify({ tools: listed }).length;
+    const size = JSON.stringify({ tools }).length;
     assert.ok(size <= MAX_TOOLS_LIST_CHARS, `tools/list is ${size} characters`);
   });
 
@@ -377,26 +401,22 @@ describe('callTool', () => {
 
 describe('argument names', () => {
   const run = (name, args) => callTool({ params: { name, arguments: args } });
-  // Records the arguments a tool's handler receives.
-  const spy = () => {
-    const seen = [];
-    const handlers = [async (req) => { seen.push(req.params.arguments); return { content: [{ type: 'text', text: '{}' }] }; }];
-    return { seen, handlers };
-  };
 
   it('maps lang and language to langwritten on every tool that has it', async () => {
+    await run('get_daily_text', { lang: 'S', date: '2026-10-11' });
+    assert.ok(fetched.some((u) => u.startsWith('https://wol.jw.org/es/wol/h/r4/lp-s/')), fetched.join('\n'));
+    fetched = [];
     await run('getWatchtowerContent', { language: 'Spanish' });
     assert.ok(fetched.some((u) => u.includes('GETPUBMEDIALINKS') && u.includes('langwritten=S')), fetched.join('\n'));
     fetched = [];
-    await run('getWorkbookLinks', { lang: 'S' });
-    assert.ok(fetched.some((u) => u.includes('GETPUBMEDIALINKS') && u.includes('langwritten=S')), fetched.join('\n'));
+    await run('search_wol', { query: 'resurrección', lang: 'S' });
+    assert.ok(fetched.some((u) => u.startsWith('https://wol.jw.org/es/wol/s/r4/lp-s')), fetched.join('\n'));
   });
 
   it('maps link to url and the captions aliases to video_id', async () => {
-    const { seen, handlers } = spy();
-    const link = 'https://cfp2.jw-cdn.org/a/abc123/1/o/mwb_E_202609_04.rtf';
-    await callTool({ params: { name: 'getWorkbookContent', arguments: { link } } }, { handlers });
-    assert.deepEqual(seen, [{ url: link }]);
+    await run('read_wol_document', { link: 'https://wol.jw.org/en/wol/d/r1/lp-e/2025241' });
+    assert.ok(fetched.includes('https://wol.jw.org/en/wol/d/r1/lp-e/2025241'), fetched.join('\n'));
+    fetched = [];
     await run('get_jw_captions', { link: 'https://www.jw.org/finder?wtlocale=E&lank=pub-jwb-142_1_VIDEO' });
     assert.ok(fetched.some((u) => u.includes('pub-jwb-142_1_VIDEO')), fetched.join('\n'));
   });
@@ -416,20 +436,21 @@ describe('argument names', () => {
   });
 
   it('drops any other unknown argument with a note, as 1.3.3 ignored it', async () => {
-    const { seen, handlers } = spy();
+    const seen = [];
+    const handlers = [async (req) => { seen.push(req.params.arguments); return { content: [{ type: 'text', text: '{}' }] }; }];
     const verse = await callTool({ params: { name: 'get_bible_verse', arguments: { book: 43, chapter: 3, verse: 16, fields: ['verses'], limit: 3 } } }, { handlers });
     assert.equal(verse.isError, undefined);
     assert.equal(verse.content[0].text, '{}', 'the tool\'s JSON stays first');
     assert.deepEqual(seen.pop(), { book: 43, chapter: 3, verse: 16 });
     assert.equal(verse.content.at(-1).text, 'Ignored arguments "fields", "limit": get_bible_verse takes reference, book, chapter, verse, langwritten, pronunciation_marks.');
-    const links = await callTool({ params: { name: 'getWorkbookLinks', arguments: JSON.parse('{"__proto__": 1, "constructor": 2, "toString": 3, "translation": "nwt"}') } }, { handlers });
-    assert.equal(links.isError, undefined);
+    const daily = await callTool({ params: { name: 'get_daily_text', arguments: JSON.parse('{"__proto__": 1, "constructor": 2, "toString": 3, "translation": "nwt"}') } }, { handlers });
+    assert.equal(daily.isError, undefined);
     const passed = seen.pop();
     assert.deepEqual(Object.keys(passed), []);
     assert.equal(Object.getPrototypeOf(passed), Object.prototype);
-    assert.match(links.content.at(-1).text, /^Ignored arguments "__proto__", "constructor", "toString", "translation": getWorkbookLinks takes langwritten, date, issue, fileformat\.$/);
-    const many = await callTool({ params: { name: 'getWorkbookLinks', arguments: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`junk${i}`, i])) } }, { handlers });
-    assert.match(many.content.at(-1).text, /"junk9" and 20 more: getWorkbookLinks takes/);
+    assert.match(daily.content.at(-1).text, /^Ignored arguments "__proto__", "constructor", "toString", "translation": get_daily_text takes date, langwritten, sources\.$/);
+    const many = await callTool({ params: { name: 'get_daily_text', arguments: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`junk${i}`, i])) } }, { handlers });
+    assert.match(many.content.at(-1).text, /"junk9" and 20 more: get_daily_text takes/);
     const real = await run('search_bible_books', { query: 'John', foo: 1 });
     assert.equal(real.isError, undefined);
     assert.equal(real.content.length, 2);

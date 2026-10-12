@@ -8,6 +8,7 @@ import { handleScriptureTools } from '../../src/tools/scripture-tools.js';
 import { clearBookNames } from '../../src/tools/bible-books.js';
 import { clearBibleCache } from '../../src/tools/bible-api.js';
 import { MAX_RESULT_TOKENS, estimateTokens } from '../../src/tools/results.js';
+import { handleWolTools } from '../../src/tools/wol-tools.js';
 
 const LIVE = process.env.JW_MCP_LIVE === '1';
 const skip = LIVE ? false : 'set JW_MCP_LIVE=1 to run live tests';
@@ -190,6 +191,13 @@ describe('get_verse_with_study (live)', { skip }, () => {
     const result = await handleScriptureTools({ params: { name: 'get_verse_with_study', arguments: { reference: 'Matthew 26', fields, limit: 100 } } });
     assert.notEqual(result.isError, true, result.content[0].text);
     assert.ok(estimateTokens(result.content[0].text) <= MAX_RESULT_TOKENS, `about ${estimateTokens(result.content[0].text)} tokens`);
+  });
+
+  it('a link-heavy Research Guide page read with max_chars 80000 stays within the token budget', async () => {
+    const result = await handleWolTools({ params: { name: 'read_wol_document', arguments: { url: 'https://wol.jw.org/en/wol/d/r1/lp-e/1200029055', max_chars: 80000 } } });
+    assert.notEqual(result.isError, true, result.content[0].text);
+    assert.ok(estimateTokens(result.content[0].text) <= MAX_RESULT_TOKENS, `about ${estimateTokens(result.content[0].text)} tokens`);
+    assert.notEqual(JSON.parse(result.content[0].text).next_offset, null);
   });
 
   it('Psalm 119 has letter headings, not a superscription', async () => {

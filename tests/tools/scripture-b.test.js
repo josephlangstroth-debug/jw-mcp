@@ -478,7 +478,7 @@ describe('scripture tool definitions', () => {
     assert.ok(fields.items.enum.includes('footnotes'));
     assert.ok(fields.items.enum.includes('chapter_articles'));
     assert.equal(limit.type, 'integer');
-    assert.match(getVerseWithStudyTool.description, /study_articles \(Research Guide/);
+    assert.match(getVerseWithStudyTool.description, /read_wol_document/);
   });
 
   it('the handler ignores other tools and never throws on missing arguments', async () => {

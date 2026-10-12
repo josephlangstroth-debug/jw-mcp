@@ -935,9 +935,9 @@ export async function periodicalContent(rawArgs, tools) {
   };
 }
 
-// Song videos (finder?lank=) and cited publications (finder?docid=) linked
-// in the RTF. Song videos have no captions, so each is followed by its lyrics
-// page on WOL.
+// Song videos (finder?lank=) and cited publications (finder?docid=, which
+// read_wol_document opens) linked in the RTF. Song videos have no captions,
+// so each is followed by its lyrics page on WOL.
 function linksOf(file) {
   if (!file.links?.length) return {};
   return { links: file.links.flatMap((link) => [link, songLyricsLink(link)].filter(Boolean)) };
@@ -972,13 +972,16 @@ function checkFileUrl(value) {
   } catch (error) {
     if (!(error instanceof ArgError) || error.tooLong) throw error;
     const s = typeof value === 'string' ? value.trim() : '';
+    // WOL links and jw.org finder?docid= links are pages read_wol_document opens.
+    const readable = /^(?:https?:\/\/)?wol\.jw\.org\//i.test(s) || /^(?:https?:\/\/)?(?:www\.)?jw\.org\/(?:finder|open)\/?\?(?:.*&)?docid=\d/i.test(s);
+    const hint = readable ? `${FILE_URL_HINT} To read that page itself, call read_wol_document with this link.` : FILE_URL_HINT;
     if (/^(?:https?:\/\/)?(?:www\.)?jw\.org\//i.test(s)) {
       throw new ArgError('url', value, FILE_URL_TEXT, {
         message: 'Invalid "url": that is a jw.org page link (the "link" field), not a file. Pass the "url" field of the same entry from the links tool (a cfp2.jw-cdn.org .rtf file).',
-        hint: FILE_URL_HINT
+        hint
       });
     }
-    throw new ArgError('url', value, FILE_URL_TEXT, { hint: FILE_URL_HINT });
+    throw new ArgError('url', value, FILE_URL_TEXT, { hint });
   }
   if (!/\.(rtf|txt)$/i.test(url.pathname)) {
     const ext = /\.([a-z0-9]+)$/i.exec(url.pathname)?.[1]?.toUpperCase();
